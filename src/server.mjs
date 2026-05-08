@@ -129,7 +129,7 @@ function textFromContent(content) {
 
 function truncate(value, max = 12000) {
   const text = String(value ?? '');
-  return text.length > max ? ${text.slice(0, max)}\n... truncated ... : text;
+  return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
 }
 
 function compactItem(item) {
