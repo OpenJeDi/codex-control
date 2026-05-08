@@ -158,11 +158,11 @@ function includes(haystack, needle) {
 }
 
 function filterThreads(threads, params) {
-  const q = params.get('q') ?? params.get('query') ?? '';
-  const repo = params.get('repo') ?? '';
-  const source = params.get('source') ?? '';
-  const branch = params.get('branch') ?? '';
-  const cwd = params.get('cwd') ?? '';
+  const q = (params.get('q') ?? params.get('query') ?? '').trim();
+  const repo = (params.get('repo') ?? '').trim();
+  const source = (params.get('source') ?? '').trim();
+  const branch = (params.get('branch') ?? '').trim();
+  const cwd = (params.get('cwd') ?? '').trim();
   const limit = Math.min(Number(params.get('limit') || 50), 500);
 
   const filtered = threads.filter((thread) => {
@@ -187,6 +187,36 @@ function filterThreads(threads, params) {
   });
 
   return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, limit);
+}
+
+
+function buildFacets(threads) {
+  const repos = new Map();
+  const branches = new Map();
+  const sources = new Map();
+
+  for (const thread of threads) {
+    countFacet(repos, thread.gitInfo?.originUrl || '');
+    countFacet(branches, thread.gitInfo?.branch || '');
+    countFacet(sources, thread.source || '');
+  }
+
+  return {
+    repos: facetList(repos),
+    branches: facetList(branches),
+    sources: facetList(sources),
+  };
+}
+
+function countFacet(map, value) {
+  if (!value) return;
+  map.set(value, (map.get(value) ?? 0) + 1);
+}
+
+function facetList(map) {
+  return [...map.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 }
 
 function sendJson(res, status, payload) {
@@ -237,7 +267,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/threads') {
       const includeArchived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true';
       const threads = await codex.listThreads({ includeArchived });
-      sendJson(res, 200, { data: filterThreads(threads, url.searchParams) });
+      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
       return;
     }
 

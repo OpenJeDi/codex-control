@@ -10,7 +10,7 @@
   <header class="topbar">
     <div>
       <h1>Codex Control</h1>
-      <p id="status">Connecting to Codex…</p>
+      <p id="status">Connecting to Codex...</p>
     </div>
     <button id="refresh" type="button">Refresh</button>
   </header>
@@ -18,15 +18,18 @@
   <main class="layout">
     <section class="panel list-panel">
       <form id="filters" class="filters">
-        <input name="repo" placeholder="repo" value="crash-party">
+        <select name="repo" id="repoFilter" title="Git repository">
+          <option value="">all repos</option>
+        </select>
         <input name="q" placeholder="search sessions">
-        <input name="branch" placeholder="branch">
-        <select name="source">
+        <input name="branch" placeholder="branch contains">
+        <select name="source" title="Source">
           <option value="">all sources</option>
           <option value="vscode">vscode</option>
           <option value="cli">cli</option>
         </select>
-        <label class="check"><input type="checkbox" name="archived"> archived</label>
+        <label class="check"><input type="checkbox" name="groupBranch"> group by branch</label>
+        <label class="check"><input type="checkbox" name="archived"> search archive</label>
       </form>
       <div id="sessionList" class="session-list"></div>
     </section>

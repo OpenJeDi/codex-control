@@ -67,6 +67,22 @@ button:hover { border-color: var(--accent-2); }
 }
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
 .session-list, .detail-panel { overflow: auto; }
+.session-group { border-bottom: 1px solid var(--line); }
+.group-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--panel-2) 92%, black);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 .session {
   width: 100%;
   text-align: left;
