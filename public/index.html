@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Codex Control</h1>
+      <p id="status">Connecting to Codex…</p>
+    </div>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel list-panel">
+      <form id="filters" class="filters">
+        <input name="repo" placeholder="repo" value="crash-party">
+        <input name="q" placeholder="search sessions">
+        <input name="branch" placeholder="branch">
+        <select name="source">
+          <option value="">all sources</option>
+          <option value="vscode">vscode</option>
+          <option value="cli">cli</option>
+        </select>
+        <label class="check"><input type="checkbox" name="archived"> archived</label>
+      </form>
+      <div id="sessionList" class="session-list"></div>
+    </section>
+
+    <section class="panel detail-panel">
+      <div id="detail" class="empty">Pick a session.</div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
