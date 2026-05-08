@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+﻿import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -129,7 +129,7 @@ function textFromContent(content) {
 
 function truncate(value, max = 12000) {
   const text = String(value ?? '');
-  return text.length > max ? `${text.slice(0, max)}\n… truncated …` : text;
+  return text.length > max ? `${text.slice(0, max)}\nâ€¦ truncated â€¦` : text;
 }
 
 function compactItem(item) {
@@ -220,7 +220,7 @@ async function serveStatic(req, res, url) {
   }[ext] ?? 'application/octet-stream';
 
   const data = await readFile(filePath);
-  res.writeHead(200, { 'content-type': type });
+  res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
   res.end(data);
 }
 
@@ -257,3 +257,4 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`codex-control listening on http://${host}:${port}`);
 });
+

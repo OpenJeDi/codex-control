@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   --bg: #0c1017;
   --panel: #121824;
@@ -34,6 +34,10 @@ button, input, select {
   color: var(--text);
   padding: 9px 10px;
 }
+input, select {
+  min-width: 0;
+  width: 100%;
+}
 button { cursor: pointer; background: var(--panel-2); }
 button:hover { border-color: var(--accent-2); }
 .layout {
@@ -53,12 +57,15 @@ button:hover { border-color: var(--accent-2); }
 .list-panel { display: flex; flex-direction: column; }
 .filters {
   display: grid;
-  grid-template-columns: 1fr 1.3fr 0.8fr 0.8fr auto;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
-.check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+.filters > * {
+  min-width: 0;
+}
+.check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
 .session-list, .detail-panel { overflow: auto; }
 .session {
   width: 100%;
@@ -92,3 +99,4 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   .layout { grid-template-columns: 1fr; height: auto; }
   .filters { grid-template-columns: 1fr 1fr; }
 }
+
