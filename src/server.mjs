@@ -142,10 +142,13 @@ class CodexAppServer {
 
   async readThread(threadId) {
     await this.ready;
-    const [read, turns] = await Promise.all([
-      this.request('thread/read', { threadId }),
-      this.request('thread/turns/list', { threadId }),
-    ]);
+    const read = await this.request('thread/read', { threadId });
+    let turns = { data: [] };
+    try {
+      turns = await this.request('thread/turns/list', { threadId });
+    } catch (error) {
+      if (!isTurnsNotReadyError(error)) throw error;
+    }
     return {
       thread: await this.decorateThread(read.thread),
       turns: (turns.data ?? []).map(compactTurn),
@@ -215,6 +218,11 @@ function normalizeStatus(status) {
   if (!status) return { type: 'idle' };
   if (typeof status === 'string') return { type: status };
   return { ...status, type: status.type ?? 'idle' };
+}
+
+function isTurnsNotReadyError(error) {
+  const message = String(error?.message ?? error ?? '').toLowerCase();
+  return message.includes('not materialized yet') || message.includes('turns/list is unavailable before first user message');
 }
 
 const terminalRolloutEvents = new Set([
