@@ -297,7 +297,6 @@ function renderSession(session) {
           <span class="info-dot" aria-label="Session info">i</span>
         </span>
       </div>
-      <div class="session-preview">${escapeHtml(session.preview || '')}</div>
     </button>`;
 }
 

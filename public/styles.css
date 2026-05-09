@@ -212,7 +212,6 @@ body.sidebar-collapsed .splitter { display: none; }
   font-weight: 700;
   background: rgba(255,255,255,0.025);
 }
-.session-preview { color: var(--muted); margin-top: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; }
 .badge { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; background: rgba(255,255,255,0.03); }
 .detail { padding: 18px; }
