@@ -35,6 +35,7 @@ const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Upd
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+const liveStatusTypes = new Set(['externalactive', 'running', 'inprogress', 'waitingonapproval', 'waitingonuserinput']);
 
 function ageLabel(seconds) {
   const timestamp = Number(seconds) * 1000;
@@ -67,6 +68,20 @@ function statusLabel(thread) {
     failed: 'failed',
     error: 'error',
   }[raw.toLowerCase()] ?? normalized);
+}
+
+function isLiveThread(thread) {
+  return liveStatusTypes.has(statusClass(thread));
+}
+
+function isNearBottom(el, threshold = 120) {
+  if (!el) return false;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+
+function scrollDetailToBottom() {
+  const scroller = detailEl.querySelector('.detail-shell .detail');
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
 }
 
 function displayRepo(originUrl) {
@@ -331,6 +346,9 @@ function refreshAgeIndicators() {
 }
 
 async function loadDetail(id, { quiet = false } = {}) {
+  const previousId = activeId;
+  const previousScroller = detailEl.querySelector('.detail-shell .detail');
+  const shouldContinueFollowing = quiet && id === previousId && isNearBottom(previousScroller);
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
@@ -342,6 +360,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
+    if (isLiveThread(data.thread) && (!quiet || shouldContinueFollowing)) requestAnimationFrame(scrollDetailToBottom);
   } catch (error) {
     detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
