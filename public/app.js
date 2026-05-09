@@ -74,7 +74,7 @@ function isBusyThread(thread) {
   return busyStatusTypes.has(statusClass(thread));
 }
 
-function isNearBottom(el, threshold = 120) {
+function isNearBottom(el, threshold = 220) {
   if (!el) return false;
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
 }
@@ -84,12 +84,15 @@ function scrollDetailToBottom({ smooth = false } = {}) {
   if (!scroller) return;
   scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   updateJumpBottomButton(scroller);
+  requestAnimationFrame(() => updateJumpBottomButton(scroller));
 }
 
 function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell .detail')) {
   const button = detailEl.querySelector('.jump-bottom');
   if (!button || !scroller) return;
-  button.hidden = isNearBottom(scroller) || scroller.scrollHeight <= scroller.clientHeight + 1;
+  const canScroll = scroller.scrollHeight > scroller.clientHeight + 1;
+  button.hidden = !canScroll;
+  button.disabled = !canScroll || isNearBottom(scroller);
 }
 
 function bindDetailScrollControls() {
@@ -99,6 +102,7 @@ function bindDetailScrollControls() {
   scroller.addEventListener('scroll', () => updateJumpBottomButton(scroller), { passive: true });
   button.addEventListener('click', () => scrollDetailToBottom());
   updateJumpBottomButton(scroller);
+  requestAnimationFrame(() => updateJumpBottomButton(scroller));
 }
 
 function displayRepo(originUrl) {
@@ -433,7 +437,6 @@ function renderDetail({ thread, turns }) {
 function renderBusyIndicator(thread) {
   if (!isBusyThread(thread)) return '';
   return `<div class="busy-indicator" role="status" aria-live="polite">
-    <span class="busy-line"></span>
     <span class="busy-label">Agent working</span>
     <span class="busy-dots" aria-hidden="true"><span></span><span></span><span></span></span>
   </div>`;
