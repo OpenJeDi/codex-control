@@ -21,10 +21,8 @@ const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
 let debounceTimer = null;
 let detailRefreshTimer = null;
-let repoInitialized = false;
 let isDraggingSidebar = false;
 
-const CRASH_PARTY_REPO = 'git@github.com:OutOfTheBoxProductions/crash-party-prototype.git';
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
@@ -92,8 +90,10 @@ function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell
   const button = detailEl.querySelector('.jump-bottom');
   if (!button || !scroller) return;
   const canScroll = scroller.scrollHeight > scroller.clientHeight + 1;
-  button.hidden = !canScroll;
-  button.disabled = !canScroll || isNearBottom(scroller);
+  const atBottom = isNearBottom(scroller);
+  const shouldShowButton = canScroll && !atBottom;
+  button.hidden = !shouldShowButton;
+  button.disabled = !shouldShowButton;
 }
 
 function bindDetailScrollControls() {
@@ -170,15 +170,6 @@ async function loadSessions({ quiet = false } = {}) {
     const params = paramsFromForm();
     const { data, facets } = await api(`/api/threads?${params}`);
     updateRepoOptions(facets?.repos ?? []);
-
-    if (!repoInitialized) {
-      repoInitialized = true;
-      const crashParty = (facets?.repos ?? []).find((repo) => repo.value === CRASH_PARTY_REPO || repo.value.includes('crash-party-prototype'));
-      if (crashParty && !repoFilter.value) {
-        repoFilter.value = crashParty.value;
-        return loadSessions();
-      }
-    }
 
     if (!data.length) {
       const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';

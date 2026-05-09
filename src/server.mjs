@@ -14,6 +14,7 @@ const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
+const gitInfoByCwd = new Map();
 
 class CodexAppServer {
   constructor() {
@@ -124,10 +125,11 @@ class CodexAppServer {
 
   async decorateThread(thread) {
     if (!thread?.id) return thread;
+    const enriched = await enrichThreadGitInfo(thread);
     const remembered = this.statusByThread.get(String(thread.id));
-    if (remembered) return { ...thread, status: remembered };
-    const external = await inferExternalThreadStatus(thread);
-    return external ? { ...thread, status: external } : thread;
+    if (remembered) return { ...enriched, status: remembered };
+    const external = await inferExternalThreadStatus(enriched);
+    return external ? { ...enriched, status: external } : enriched;
   }
 
   request(method, params = {}, timeoutMs = 15000) {
@@ -147,10 +149,23 @@ class CodexAppServer {
     this.proc.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
-  async listThreads({ includeArchived = false } = {}) {
+  async listThreads({ includeArchived = false, limit = 50 } = {}) {
     await this.ready;
-    const result = await this.request('thread/list', { includeArchived });
-    return Promise.all((result.data ?? []).map((thread) => this.decorateThread(thread)));
+    const target = Math.min(Math.max(Number(limit) || 50, 1), 500);
+    const data = [];
+    let cursor = null;
+
+    while (data.length < target) {
+      const pageLimit = Math.min(25, target - data.length);
+      const params = { includeArchived, limit: pageLimit };
+      if (cursor) params.cursor = cursor;
+      const result = await this.request('thread/list', params);
+      data.push(...(result.data ?? []));
+      cursor = result.nextCursor;
+      if (!cursor || !(result.data ?? []).length) break;
+    }
+
+    return Promise.all(data.map((thread) => this.decorateThread(thread)));
   }
 
   async readThread(threadId) {
@@ -404,6 +419,38 @@ async function inferExternalThreadStatus(thread) {
   } catch {
     return null;
   }
+}
+
+async function enrichThreadGitInfo(thread) {
+  if (String(thread?.gitInfo?.originUrl ?? '').trim() || !thread?.cwd) return thread;
+  const gitInfo = await gitInfoForCwd(thread.cwd);
+  if (!Object.keys(gitInfo).length) return thread;
+  const merged = { ...gitInfo };
+  for (const [key, value] of Object.entries(thread.gitInfo ?? {})) {
+    if (value !== undefined && value !== null && String(value) !== '') merged[key] = value;
+  }
+  return { ...thread, gitInfo: merged };
+}
+
+async function gitInfoForCwd(cwd) {
+  const key = String(cwd ?? '');
+  if (!key || !existsSync(key)) return {};
+  if (gitInfoByCwd.has(key)) return gitInfoByCwd.get(key);
+  const info = {};
+  try {
+    const [originUrl, branch, sha] = await Promise.all([
+      execFileText('git', ['-C', key, 'remote', 'get-url', 'origin']).catch(() => ''),
+      execFileText('git', ['-C', key, 'branch', '--show-current']).catch(() => ''),
+      execFileText('git', ['-C', key, 'rev-parse', 'HEAD']).catch(() => ''),
+    ]);
+    if (originUrl.trim()) info.originUrl = originUrl.trim();
+    if (branch.trim()) info.branch = branch.trim();
+    if (sha.trim()) info.sha = sha.trim();
+  } catch {
+    // Missing repo metadata should not hide the session.
+  }
+  gitInfoByCwd.set(key, info);
+  return info;
 }
 
 async function readLastRolloutEvent(filePath) {
@@ -923,7 +970,7 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const includeArchived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true';
-      const threads = await codex.listThreads({ includeArchived });
+      const threads = await codex.listThreads({ includeArchived, limit: url.searchParams.get('limit') });
       sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
       return;
     }
