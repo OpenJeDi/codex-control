@@ -255,3 +255,19 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .repo-row { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 520px) { .search-row { grid-template-columns: 1fr; } }
 
+
+.detail-panel { display: grid; }
+.detail-shell { min-height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.detail-shell .detail { overflow: auto; }
+.detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
+.status { text-transform: lowercase; }
+.status.running, .status.inProgress { border-color: rgba(104, 211, 145, 0.55); color: var(--accent); }
+.status.error, .status.failed { border-color: rgba(251, 113, 133, 0.55); color: var(--danger); }
+.worktree-chip.active { border-color: var(--accent); background: rgba(104, 211, 145, 0.10); }
+.new-session-form, .prompt-bar { display: grid; gap: 8px; }
+.new-session-form { margin-top: 8px; }
+.new-session-form textarea, .prompt-bar textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid var(--line); border-radius: 12px; background: #0f1622; color: var(--text); padding: 10px; font: inherit; }
+.prompt-bar { border-top: 1px solid var(--line); padding: 10px; background: color-mix(in srgb, var(--panel) 96%, black); }
+.prompt-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.prompt-actions input[type="file"] { flex: 1; width: auto; padding: 7px 9px; color: var(--muted); }
+.prompt-actions button:disabled { opacity: 0.6; cursor: wait; }

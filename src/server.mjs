@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -11,11 +12,14 @@ const rootDir = path.resolve(__dirname, '..');
 const publicDir = path.join(rootDir, 'public');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
+const maxBodyBytes = 75 * 1024 * 1024;
 
 class CodexAppServer {
   constructor() {
     this.nextId = 1;
     this.pending = new Map();
+    this.statusByThread = new Map();
+    this.eventClients = new Set();
     this.ready = this.start();
   }
 
@@ -37,6 +41,7 @@ class CodexAppServer {
         reject(err);
       }
       this.pending.clear();
+      this.broadcast('codex-exit', { code, signal });
       this.ready = Promise.reject(err);
     });
 
@@ -74,7 +79,35 @@ class CodexAppServer {
       return;
     }
 
-    // Notifications are useful later for live updates. For v0, keep them quiet.
+    if (message.method) this.handleNotification(message);
+  }
+
+  handleNotification(message) {
+    const method = message.method;
+    const params = message.params ?? {};
+    this.rememberStatus(method, params);
+    this.broadcast('codex-notification', { method, params });
+  }
+
+  rememberStatus(method, params) {
+    const lower = String(method ?? '').toLowerCase();
+    const thread = params.thread;
+    const threadId = params.threadId ?? params.id ?? thread?.id;
+    if (!threadId) return;
+
+    let status = params.status ?? thread?.status;
+    if (!status && (lower.includes('turnstarted') || lower.includes('turn/started'))) status = { type: 'running' };
+    if (!status && (lower.includes('turncompleted') || lower.includes('turn/completed'))) status = { type: 'idle' };
+    if (!status && lower.includes('error')) status = { type: 'error' };
+    if (!status) return;
+
+    this.statusByThread.set(String(threadId), normalizeStatus(status));
+  }
+
+  decorateThread(thread) {
+    if (!thread?.id) return thread;
+    const remembered = this.statusByThread.get(String(thread.id));
+    return remembered ? { ...thread, status: remembered } : thread;
   }
 
   request(method, params = {}, timeoutMs = 15000) {
@@ -97,7 +130,7 @@ class CodexAppServer {
   async listThreads({ includeArchived = false } = {}) {
     await this.ready;
     const result = await this.request('thread/list', { includeArchived });
-    return result.data ?? [];
+    return (result.data ?? []).map((thread) => this.decorateThread(thread));
   }
 
   async readThread(threadId) {
@@ -107,13 +140,46 @@ class CodexAppServer {
       this.request('thread/turns/list', { threadId }),
     ]);
     return {
-      thread: read.thread,
+      thread: this.decorateThread(read.thread),
       turns: (turns.data ?? []).map(compactTurn),
     };
+  }
+
+  async startThread(cwd) {
+    await this.ready;
+    const result = await this.request('thread/start', { cwd }, 30000);
+    if (result.thread) this.rememberStatus('thread/started', { thread: result.thread });
+    return { ...result, thread: this.decorateThread(result.thread) };
+  }
+
+  async startTurn(threadId, input) {
+    await this.ready;
+    const result = await this.request('turn/start', { threadId, input }, 30000);
+    this.rememberStatus('turn/started', { threadId, status: { type: 'running' } });
+    this.broadcast('codex-notification', { method: 'turn/started', params: { threadId } });
+    return result;
+  }
+
+  addEventClient(res) {
+    const id = randomUUID();
+    this.eventClients.add(res);
+    res.write(`event: ready\ndata: ${JSON.stringify({ id })}\n\n`);
+    return () => this.eventClients.delete(res);
+  }
+
+  broadcast(event, payload) {
+    const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of this.eventClients) client.write(data);
   }
 }
 
 const codex = new CodexAppServer();
+
+function normalizeStatus(status) {
+  if (!status) return { type: 'idle' };
+  if (typeof status === 'string') return { type: status };
+  return { ...status, type: status.type ?? 'idle' };
+}
 
 function execFileText(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -219,6 +285,7 @@ function filterThreads(threads, params) {
   const limit = Math.min(Number(params.get('limit') || 50), 500);
 
   const filtered = threads.filter((thread) => {
+    const status = thread.status?.type ?? '';
     const searchable = [
       thread.id,
       thread.name,
@@ -226,6 +293,7 @@ function filterThreads(threads, params) {
       thread.cwd,
       thread.path,
       thread.source,
+      status,
       thread.gitInfo?.originUrl,
       thread.gitInfo?.branch,
       thread.gitInfo?.sha,
@@ -241,7 +309,6 @@ function filterThreads(threads, params) {
 
   return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, limit);
 }
-
 
 function buildFacets(threads) {
   const repos = new Map();
@@ -270,6 +337,174 @@ function facetList(map) {
   return [...map.entries()]
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
+
+function cleanSlug(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
+function assertSafeBranch(branch) {
+  if (!branch || !/^[a-z0-9][a-z0-9-]*$/.test(branch)) {
+    throw new Error('Branch/worktree name must be lowercase hyphenated text with no slashes.');
+  }
+}
+
+function repoWorktreeRoot(sourcePath) {
+  const parsed = path.win32.parse(sourcePath);
+  const base = path.win32.basename(sourcePath);
+  const parent = path.win32.dirname(sourcePath);
+  const parentBase = path.win32.basename(parent).toLowerCase();
+  if (parentBase.endsWith('-worktrees') || parentBase === 'worktrees') return parent;
+  if (['main', 'master', 'develop'].includes(base.toLowerCase()) && parentBase === 'worktrees') return parent;
+  return path.win32.join(parent, `${base}-worktrees`);
+}
+
+async function buildWorktreePlan(body) {
+  const sourcePath = String(body.sourcePath ?? '').trim();
+  const rawBranch = String(body.branch ?? '').trim() || `feature-${cleanSlug(body.slug)}`;
+  const branch = cleanSlug(rawBranch.startsWith('feature-') ? rawBranch : rawBranch);
+  assertSafeBranch(branch);
+  if (!sourcePath) throw new Error('Choose an existing worktree as the source.');
+
+  const targetRoot = String(body.targetRoot ?? '').trim() || repoWorktreeRoot(sourcePath);
+  const targetPath = path.win32.join(targetRoot, branch);
+  const display = `git -C ${quoteWinArg(sourcePath)} worktree add -b ${quoteWinArg(branch)} ${quoteWinArg(targetPath)}`;
+  return {
+    sourcePath,
+    branch,
+    targetRoot,
+    targetPath,
+    commands: [{ display, command: 'git', args: ['-C', sourcePath, 'worktree', 'add', '-b', branch, targetPath] }],
+  };
+}
+
+function quoteWinArg(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+async function createWorktree(body) {
+  if (!body.confirmed) throw new Error('Worktree creation requires confirmation.');
+  const plan = await buildWorktreePlan(body);
+  if (existsSync(plan.targetPath)) throw new Error(`Target path already exists: ${plan.targetPath}`);
+  const existing = await execFileText('git', ['-C', plan.sourcePath, 'branch', '--list', plan.branch]);
+  if (existing.trim()) throw new Error(`Branch already exists: ${plan.branch}`);
+  const command = plan.commands[0];
+  await execFileText(command.command, command.args);
+  return { ...plan, created: true };
+}
+
+async function readJson(req) {
+  const buffer = await readBody(req);
+  if (!buffer.length) return {};
+  return JSON.parse(buffer.toString('utf8'));
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBodyBytes) {
+        reject(new Error('Request body too large.'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function parseMultipart(buffer, contentType) {
+  const match = String(contentType ?? '').match(/boundary=(?:(?:"([^"]+)")|([^;]+))/i);
+  if (!match) throw new Error('Missing multipart boundary.');
+  const boundary = Buffer.from(`--${match[1] ?? match[2]}`);
+  const parts = [];
+  let cursor = buffer.indexOf(boundary);
+
+  while (cursor !== -1) {
+    cursor += boundary.length;
+    if (buffer.slice(cursor, cursor + 2).toString() === '--') break;
+    if (buffer.slice(cursor, cursor + 2).toString() === '\r\n') cursor += 2;
+    const next = buffer.indexOf(boundary, cursor);
+    if (next === -1) break;
+    let end = next;
+    if (buffer.slice(end - 2, end).toString() === '\r\n') end -= 2;
+    const part = buffer.slice(cursor, end);
+    const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
+    if (headerEnd !== -1) {
+      const headerText = part.slice(0, headerEnd).toString('utf8');
+      const data = part.slice(headerEnd + 4);
+      const headers = Object.fromEntries(headerText.split(/\r?\n/).map((line) => {
+        const index = line.indexOf(':');
+        return index === -1 ? ['', ''] : [line.slice(0, index).toLowerCase(), line.slice(index + 1).trim()];
+      }).filter(([key]) => key));
+      const disposition = headers['content-disposition'] ?? '';
+      const name = disposition.match(/name="([^"]+)"/)?.[1] ?? '';
+      const filename = disposition.match(/filename="([^"]*)"/)?.[1] ?? '';
+      parts.push({ name, filename, contentType: headers['content-type'] ?? '', data });
+    }
+    cursor = next;
+  }
+
+  return parts;
+}
+
+function safeFilename(name) {
+  const base = path.win32.basename(String(name ?? 'attachment')) || 'attachment';
+  return base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'attachment';
+}
+
+function safeThreadId(threadId) {
+  return String(threadId ?? '').replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+async function buildTurnInput(threadId, thread, req) {
+  const contentType = req.headers['content-type'] ?? '';
+  let prompt = '';
+  let files = [];
+
+  if (contentType.includes('multipart/form-data')) {
+    const parts = parseMultipart(await readBody(req), contentType);
+    prompt = parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '';
+    files = parts.filter((part) => part.name === 'files' && part.filename);
+  } else {
+    const body = await readJson(req);
+    prompt = String(body.prompt ?? '');
+  }
+
+  const input = [];
+  const filePathNotes = [];
+  if (prompt.trim()) input.push({ type: 'text', text: prompt.trim() });
+
+  if (files.length) {
+    const cwd = thread.cwd;
+    if (!cwd) throw new Error('Thread has no cwd; cannot save attachments.');
+    const attachmentDir = path.win32.join(cwd, '.codex-control', 'attachments', safeThreadId(threadId));
+    await mkdir(attachmentDir, { recursive: true });
+
+    for (const file of files) {
+      const filename = `${Date.now()}-${safeFilename(file.filename)}`;
+      const filePath = path.win32.join(attachmentDir, filename);
+      await writeFile(filePath, file.data);
+      if (String(file.contentType).toLowerCase().startsWith('image/')) input.push({ type: 'localImage', path: filePath });
+      else filePathNotes.push(filePath);
+    }
+  }
+
+  if (filePathNotes.length) {
+    input.push({ type: 'text', text: `Attached local file paths:\n${filePathNotes.map((filePath) => `- ${filePath}`).join('\n')}` });
+  }
+
+  if (!input.length) throw new Error('Enter a prompt or attach a file.');
+  return input;
 }
 
 function sendJson(res, status, payload) {
@@ -317,21 +552,62 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === '/api/events') {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        connection: 'keep-alive',
+      });
+      const remove = codex.addEventClient(res);
+      req.on('close', remove);
+      return;
+    }
 
     if (url.pathname === '/api/repo-worktrees') {
       sendJson(res, 200, await worktreesForRepo(url.searchParams.get('repo')));
       return;
     }
 
-    if (url.pathname === '/api/threads') {
+    if (url.pathname === '/api/worktree-plan' && req.method === 'POST') {
+      sendJson(res, 200, await buildWorktreePlan(await readJson(req)));
+      return;
+    }
+
+    if (url.pathname === '/api/worktrees' && req.method === 'POST') {
+      sendJson(res, 200, await createWorktree(await readJson(req)));
+      return;
+    }
+
+    if (url.pathname === '/api/threads' && req.method === 'GET') {
       const includeArchived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true';
       const threads = await codex.listThreads({ includeArchived });
       sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
       return;
     }
 
+    if (url.pathname === '/api/threads' && req.method === 'POST') {
+      const body = await readJson(req);
+      const cwd = String(body.cwd ?? '').trim();
+      if (!cwd) throw new Error('Choose a worktree first.');
+      const started = await codex.startThread(cwd);
+      const threadId = started.thread?.id;
+      const prompt = String(body.prompt ?? '').trim();
+      if (threadId && prompt) await codex.startTurn(threadId, [{ type: 'text', text: prompt }]);
+      sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
+      return;
+    }
+
+    const turnMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/turn$/);
+    if (turnMatch && req.method === 'POST') {
+      const threadId = decodeURIComponent(turnMatch[1]);
+      const data = await codex.readThread(threadId);
+      const input = await buildTurnInput(threadId, data.thread, req);
+      sendJson(res, 200, await codex.startTurn(threadId, input));
+      return;
+    }
+
     const threadMatch = url.pathname.match(/^\/api\/threads\/([^/]+)$/);
-    if (threadMatch) {
+    if (threadMatch && req.method === 'GET') {
       sendJson(res, 200, await codex.readThread(decodeURIComponent(threadMatch[1])));
       return;
     }
@@ -346,4 +622,3 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`codex-control listening on http://${host}:${port}`);
 });
-

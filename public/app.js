@@ -1,4 +1,4 @@
-﻿const statusEl = document.querySelector('#status');
+const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
@@ -7,12 +7,13 @@ const repoWorktrees = document.querySelector('#repoWorktrees');
 const filterToggle = document.querySelector('#filterToggle');
 const filterClose = document.querySelector('#filterClose');
 const filterDrawer = document.querySelector('#filterDrawer');
-const layout = document.querySelector('#layout');
 const splitter = document.querySelector('#splitter');
 const collapseSidebar = document.querySelector('#collapseSidebar');
 const expandSidebar = document.querySelector('#expandSidebar');
 let activeId = null;
+let selectedWorktree = '';
 let debounceTimer = null;
+let detailRefreshTimer = null;
 let repoInitialized = false;
 let isDraggingSidebar = false;
 
@@ -24,6 +25,7 @@ const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
+const statusType = (thread) => thread?.status?.type || 'idle';
 
 function displayRepo(originUrl) {
   const text = String(originUrl ?? '').trim();
@@ -59,11 +61,19 @@ function paramsFromForm() {
   return params;
 }
 
-async function api(path) {
-  const res = await fetch(path, { cache: 'no-store' });
+async function api(path, options = {}) {
+  const res = await fetch(path, { cache: 'no-store', ...options });
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || res.statusText);
   return json;
+}
+
+async function jsonApi(path, body) {
+  return api(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 async function loadHealth() {
@@ -110,9 +120,9 @@ async function loadSessions() {
   }
 }
 
-
 async function loadRepoWorktrees() {
   const repo = repoFilter.value.trim();
+  selectedWorktree = '';
   if (!repo) {
     repoWorktrees.hidden = true;
     repoWorktrees.innerHTML = '';
@@ -121,27 +131,79 @@ async function loadRepoWorktrees() {
 
   try {
     const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
-    const worktrees = data.worktrees ?? [];
+    const worktrees = (data.worktrees ?? []).filter((item) => !item.bare);
+    repoWorktrees.hidden = false;
     if (!worktrees.length) {
-      repoWorktrees.hidden = false;
       repoWorktrees.innerHTML = '<div class="repo-worktrees-title">No local worktrees found from known Codex sessions.</div>';
       return;
     }
 
-    const normalWorktrees = worktrees.filter((item) => !item.bare);
-    repoWorktrees.hidden = false;
+    selectedWorktree = worktrees[0].path;
     repoWorktrees.innerHTML = `
-      <div class="repo-worktrees-title">Worktrees <span>${normalWorktrees.length}</span></div>
+      <div class="repo-worktrees-title"><span>Worktrees</span><span>${worktrees.length}</span></div>
       <div class="worktree-chips">
-        ${normalWorktrees.map((item) => `
-          <button type="button" class="worktree-chip" title="${escapeHtml(item.path)}">
+        ${worktrees.map((item, index) => `
+          <button type="button" class="worktree-chip${index === 0 ? ' active' : ''}" title="${escapeHtml(item.path)}" data-path="${escapeHtml(item.path)}">
             <strong>${escapeHtml(item.branch || 'detached')}</strong>
             <span>${escapeHtml(compactPath(item.path))}</span>
           </button>`).join('')}
-      </div>`;
+      </div>
+      <form class="new-session-form" id="newSessionForm">
+        <textarea name="prompt" rows="2" placeholder="Prompt for a new session in the selected worktree"></textarea>
+        <div class="prompt-actions">
+          <button type="button" id="addWorktree">Add worktree</button>
+          <button type="submit">Start session</button>
+        </div>
+      </form>`;
+
+    for (const chip of repoWorktrees.querySelectorAll('.worktree-chip')) {
+      chip.addEventListener('click', () => {
+        selectedWorktree = chip.dataset.path;
+        for (const other of repoWorktrees.querySelectorAll('.worktree-chip')) other.classList.toggle('active', other === chip);
+      });
+    }
+    repoWorktrees.querySelector('#newSessionForm')?.addEventListener('submit', startSessionFromSelectedWorktree);
+    repoWorktrees.querySelector('#addWorktree')?.addEventListener('click', createFeatureWorktree);
   } catch (error) {
     repoWorktrees.hidden = false;
     repoWorktrees.innerHTML = `<div class="error">Worktrees unavailable: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function startSessionFromSelectedWorktree(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const prompt = new FormData(form).get('prompt');
+  if (!selectedWorktree) return window.alert('Choose a worktree first.');
+
+  const submit = form.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  submit.textContent = 'Starting...';
+  try {
+    const data = await jsonApi('/api/threads', { cwd: selectedWorktree, prompt });
+    form.reset();
+    if (data.thread?.id) await loadDetail(data.thread.id);
+    await loadSessions();
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Start session';
+  }
+}
+
+async function createFeatureWorktree() {
+  if (!selectedWorktree) return window.alert('Choose a source worktree first.');
+  const branch = window.prompt('New lowercase hyphenated branch/worktree name:');
+  if (!branch) return;
+  try {
+    const plan = await jsonApi('/api/worktree-plan', { sourcePath: selectedWorktree, branch });
+    const ok = window.confirm(`Create this worktree?\n\n${plan.commands.map((command) => command.display).join('\n')}`);
+    if (!ok) return;
+    await jsonApi('/api/worktrees', { sourcePath: selectedWorktree, branch, confirmed: true });
+    await loadSessions();
+  } catch (error) {
+    window.alert(error.message);
   }
 }
 
@@ -191,14 +253,16 @@ function renderSession(session) {
   const source = session.source || 'unknown';
   const cwd = compactPath(session.cwd);
   const repo = displayRepo(session.gitInfo?.originUrl);
+  const status = statusType(session);
   return `
     <button class="session${active}" data-id="${escapeHtml(session.id)}">
       <div class="session-title">
         <span>${escapeHtml(session.name || '(unnamed)')}</span>
-        <span class="badge">${escapeHtml(source)}</span>
+        <span class="badge status ${escapeHtml(status)}">${escapeHtml(status)}</span>
       </div>
       <div class="session-preview">${escapeHtml(session.preview || '')}</div>
       <div class="meta">
+        <span class="badge">${escapeHtml(source)}</span>
         <span class="badge">${escapeHtml(repo)}</span>
         <span class="badge">${escapeHtml(branch)}</span>
         <span class="badge">${escapeHtml(fmtTime(session.updatedAt))}</span>
@@ -214,27 +278,67 @@ async function loadDetail(id) {
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     detailEl.innerHTML = renderDetail(data);
+    detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
   } catch (error) {
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
 }
 
 function renderDetail({ thread, turns }) {
-  return `<div class="detail">
-    <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
-    <div class="preview">${escapeHtml(thread.preview || '')}</div>
-    <div class="kv">
-      <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
-      <strong>Status</strong><span>${escapeHtml(thread.status?.type || '')}</span>
-      <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
-      <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
-      <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
-      <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
-      <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
-      <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
+  const status = statusType(thread);
+  return `<div class="detail-shell">
+    <div class="detail">
+      <div class="detail-head">
+        <div>
+          <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
+          <div class="preview">${escapeHtml(thread.preview || '')}</div>
+        </div>
+        <span class="badge status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+      </div>
+      <div class="kv">
+        <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
+        <strong>Status</strong><span>${escapeHtml(status)}</span>
+        <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
+        <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
+        <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
+        <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
+        <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
+        <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
+      </div>
+      ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
     </div>
-    ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
+    <form class="prompt-bar" id="promptForm">
+      <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
+      <div class="prompt-actions">
+        <input name="files" type="file" multiple>
+        <button type="submit">Send</button>
+      </div>
+    </form>
   </div>`;
+}
+
+async function submitPrompt(event, id) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('button[type="submit"]');
+  const formData = new FormData(form);
+  submit.disabled = true;
+  submit.textContent = 'Sending...';
+  try {
+    await fetch(`/api/threads/${encodeURIComponent(id)}/turn`, { method: 'POST', body: formData }).then(async (res) => {
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    });
+    form.reset();
+    scheduleDetailRefresh(id, 700);
+    scheduleLoadSessions();
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Send';
+  }
 }
 
 function renderTurn(turn, index) {
@@ -290,6 +394,27 @@ function renderItem(item) {
 function scheduleLoadSessions() {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(loadSessions, 180);
+}
+
+function scheduleDetailRefresh(id = activeId, delay = 500) {
+  if (!id) return;
+  clearTimeout(detailRefreshTimer);
+  detailRefreshTimer = setTimeout(() => loadDetail(id), delay);
+}
+
+function connectEvents() {
+  const events = new EventSource('/api/events');
+  events.addEventListener('codex-notification', (event) => {
+    const payload = JSON.parse(event.data || '{}');
+    const params = payload.params ?? {};
+    const threadId = params.threadId ?? params.thread?.id;
+    scheduleLoadSessions();
+    if (!threadId || threadId === activeId) scheduleDetailRefresh(activeId, 700);
+  });
+  events.addEventListener('codex-exit', () => {
+    statusEl.textContent = 'Codex app-server exited';
+    events.close();
+  });
 }
 
 function setDrawerOpen(open) {
@@ -355,6 +480,6 @@ splitter.addEventListener('pointerup', () => {
   document.body.classList.remove('resizing-sidebar');
 });
 applySavedLayout();
+connectEvents();
 await loadHealth();
 await loadSessions();
-
