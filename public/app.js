@@ -127,8 +127,8 @@ async function loadHealth() {
   }
 }
 
-async function loadSessions() {
-  listEl.innerHTML = '<div class="empty">Loading sessions...</div>';
+async function loadSessions({ quiet = false } = {}) {
+  if (!quiet) listEl.innerHTML = '<div class="empty">Loading sessions...</div>';
   try {
     const params = paramsFromForm();
     const { data, facets } = await api(`/api/threads?${params}`);
@@ -459,7 +459,7 @@ function renderItem(item) {
 
 function scheduleLoadSessions() {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(loadSessions, 180);
+  debounceTimer = setTimeout(() => loadSessions({ quiet: true }), 180);
 }
 
 function scheduleDetailRefresh(id = activeId, delay = 500) {
@@ -469,20 +469,21 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 }
 
 function connectEvents() {
-  const refreshForThread = (threadId) => {
+  const refreshForThread = (threadId, { refreshDetailOnUnknown = false } = {}) => {
     scheduleLoadSessions();
-    if (!threadId || threadId === activeId) scheduleDetailRefresh(activeId, 700);
+    if (threadId === activeId || (!threadId && refreshDetailOnUnknown)) scheduleDetailRefresh(activeId, 700);
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const params = payload.params ?? {};
     const threadId = params.threadId ?? params.thread?.id;
-    refreshForThread(threadId);
+    refreshForThread(threadId, { refreshDetailOnUnknown: true });
   });
   events.addEventListener('threads-changed', (event) => {
     const payload = JSON.parse(event.data || '{}');
-    refreshForThread(payload.threadId);
+    const threadIds = Array.isArray(payload.threadIds) ? payload.threadIds : [];
+    refreshForThread(threadIds.includes(activeId) ? activeId : payload.threadId);
   });
   events.addEventListener('codex-exit', () => {
     statusEl.textContent = 'Codex app-server exited';

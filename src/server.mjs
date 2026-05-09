@@ -23,6 +23,7 @@ class CodexAppServer {
     this.watchers = [];
     this.threadsChangedTimer = null;
     this.lastThreadsChangedAt = 0;
+    this.pendingChangedThreadIds = new Set();
     this.ready = this.start();
   }
 
@@ -187,7 +188,7 @@ class CodexAppServer {
       const watcher = watch(sessionsDir, { recursive: true }, (_eventType, filename) => {
         const text = String(filename ?? '');
         if (!text.endsWith('.jsonl')) return;
-        this.scheduleThreadsChanged({ source: 'codex-sessions-watch', path: text });
+        this.scheduleThreadsChanged({ source: 'codex-sessions-watch', path: text, threadId: threadIdFromRolloutPath(text) });
       });
       watcher.on('error', (error) => console.warn('[codex-control] session watch failed:', error.message));
       this.watchers.push(watcher);
@@ -197,13 +198,16 @@ class CodexAppServer {
   }
 
   scheduleThreadsChanged(payload = {}) {
+    if (payload.threadId) this.pendingChangedThreadIds.add(String(payload.threadId));
     if (this.threadsChangedTimer) return;
     const elapsed = Date.now() - this.lastThreadsChangedAt;
     const delay = Math.max(250, 4000 - elapsed);
     this.threadsChangedTimer = setTimeout(() => {
       this.threadsChangedTimer = null;
       this.lastThreadsChangedAt = Date.now();
-      this.broadcast('threads-changed', payload);
+      const threadIds = [...this.pendingChangedThreadIds];
+      this.pendingChangedThreadIds.clear();
+      this.broadcast('threads-changed', { source: payload.source, threadId: threadIds[0] ?? null, threadIds });
     }, delay);
   }
 }
@@ -268,6 +272,11 @@ async function readLastRolloutEvent(filePath) {
   } finally {
     await handle.close();
   }
+}
+
+function threadIdFromRolloutPath(filePath) {
+  const match = String(filePath ?? '').match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+  return match?.[1] ?? null;
 }
 
 function execFileText(command, args, options = {}) {
