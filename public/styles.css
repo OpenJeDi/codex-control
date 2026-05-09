@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   --bg: #0c1017;
   --panel: #121824;
@@ -65,6 +65,9 @@ button:hover { border-color: var(--accent-2); }
 .filters > * {
   min-width: 0;
 }
+.repo-filter {
+  grid-column: 1 / -1;
+}
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
 .session-list, .detail-panel { overflow: auto; }
 .session-group { border-bottom: 1px solid var(--line); }
@@ -115,4 +118,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   .layout { grid-template-columns: 1fr; height: auto; }
   .filters { grid-template-columns: 1fr 1fr; }
 }
+
 
