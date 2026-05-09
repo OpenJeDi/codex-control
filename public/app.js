@@ -92,7 +92,7 @@ function bindDetailScrollControls() {
   const button = detailEl.querySelector('.jump-bottom');
   if (!scroller || !button) return;
   scroller.addEventListener('scroll', () => updateJumpBottomButton(scroller), { passive: true });
-  button.addEventListener('click', () => scrollDetailToBottom({ smooth: true }));
+  button.addEventListener('click', () => scrollDetailToBottom());
   updateJumpBottomButton(scroller);
 }
 
