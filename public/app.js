@@ -244,13 +244,45 @@ function renderTurn(turn, index) {
   </section>`;
 }
 
+function itemLabel(item) {
+  if (item.type === 'userMessage') return 'You';
+  if (item.type === 'agentMessage') return item.phase === 'commentary' ? 'Agent note' : 'Agent response';
+  if (item.type === 'commandExecution') return 'Command';
+  if (item.type === 'reasoning') return 'Reasoning summary';
+  if (String(item.type).toLowerCase().includes('file')) return 'File change';
+  return String(item.type ?? 'Item').replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function looksNoisy(item, body) {
+  if (item.type === 'commandExecution') return true;
+  if (String(item.type).toLowerCase().includes('file')) return true;
+  if (body.length > 1200) return true;
+  const trimmed = body.trim();
+  return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
 function renderItem(item) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
-  const phase = item.phase ? ` / ${item.phase}` : '';
+  const label = itemLabel(item);
+  const noisy = looksNoisy(item, body);
+  const preview = noisy ? body.slice(0, 220).replace(/\s+/g, ' ').trim() : body;
+
+  if (noisy) {
+    return `<article class="item ${escapeHtml(item.type)} compact-item">
+      <details>
+        <summary>
+          <span>${escapeHtml(label)}</span>
+          <small>${escapeHtml(preview || 'expand details')}</small>
+        </summary>
+        <pre>${escapeHtml(body)}</pre>
+      </details>
+    </article>`;
+  }
+
   return `<article class="item ${escapeHtml(item.type)}">
-    <div class="item-type">${escapeHtml(item.type)}${escapeHtml(phase)}</div>
+    <div class="item-type">${escapeHtml(label)}</div>
     <pre>${escapeHtml(body)}</pre>
   </article>`;
 }

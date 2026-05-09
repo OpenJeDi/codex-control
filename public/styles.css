@@ -232,7 +232,13 @@ body.sidebar-collapsed .splitter { display: none; }
 .item.userMessage { border-color: rgba(104, 211, 145, 0.28); }
 .item.agentMessage { border-color: rgba(96, 165, 250, 0.22); }
 .item.commandExecution { border-color: rgba(251, 191, 36, 0.22); }
-.item-type { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.item-type { color: var(--muted); font-size: 12px; margin-bottom: 6px; font-weight: 700; }
+.compact-item { padding: 0; overflow: hidden; }
+.compact-item details { padding: 10px 12px; }
+.compact-item summary { cursor: pointer; display: grid; gap: 4px; color: var(--muted); }
+.compact-item summary span { color: var(--text); font-weight: 700; }
+.compact-item summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-item pre { margin-top: 10px; max-height: 420px; overflow: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .empty, .error { padding: 18px; color: var(--muted); }
 .error { color: var(--danger); }
