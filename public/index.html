@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -18,18 +18,34 @@
   <main class="layout">
     <section class="panel list-panel">
       <form id="filters" class="filters">
-        <select name="repo" id="repoFilter" class="repo-filter" title="Git repository">
-          <option value="">all repos</option>
-        </select>
-        <input name="q" placeholder="search sessions">
-        <input name="branch" placeholder="branch contains">
-        <select name="source" title="Source">
-          <option value="">all sources</option>
-          <option value="vscode">vscode</option>
-          <option value="cli">cli</option>
-        </select>
-        <label class="check"><input type="checkbox" name="groupBranch"> group by branch</label>
-        <label class="check"><input type="checkbox" name="archived"> search archive</label>
+        <div class="repo-row">
+          <select name="repo" id="repoFilter" title="Git repository">
+            <option value="">all repos</option>
+          </select>
+          <button id="addRepo" type="button" title="Add repository filter">Add repo</button>
+        </div>
+
+        <div class="search-row">
+          <input name="q" id="searchInput" placeholder="search sessions">
+          <button id="filterToggle" type="button" aria-expanded="false" aria-controls="filterDrawer">Filters</button>
+        </div>
+
+        <div id="filterDrawer" class="filter-drawer" hidden>
+          <div class="drawer-head">
+            <strong>Filters</strong>
+            <button id="filterClose" type="button">Close</button>
+          </div>
+          <div class="drawer-grid">
+            <input name="branch" placeholder="branch contains">
+            <select name="source" title="Source">
+              <option value="">all sources</option>
+              <option value="vscode">vscode</option>
+              <option value="cli">cli</option>
+            </select>
+            <label class="check"><input type="checkbox" name="groupBranch"> group by branch</label>
+            <label class="check"><input type="checkbox" name="archived"> search archive</label>
+          </div>
+        </div>
       </form>
       <div id="sessionList" class="session-list"></div>
     </section>
@@ -42,4 +58,3 @@
   <script type="module" src="/app.js"></script>
 </body>
 </html>
-

@@ -57,16 +57,39 @@ button:hover { border-color: var(--accent-2); }
 .list-panel { display: flex; flex-direction: column; }
 .filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
-.filters > * {
+.filters > * { min-width: 0; }
+.repo-row, .search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
   min-width: 0;
 }
-.repo-filter {
-  grid-column: 1 / -1;
+.search-row input { min-width: 0; }
+#filterToggle.active { border-color: var(--accent-2); color: var(--accent-2); }
+.filter-drawer {
+  margin-top: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.035);
+}
+.drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+.drawer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
 }
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
 .session-list, .detail-panel { overflow: auto; }

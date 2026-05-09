@@ -3,12 +3,17 @@ const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
 const repoFilter = document.querySelector('#repoFilter');
+const addRepo = document.querySelector('#addRepo');
+const filterToggle = document.querySelector('#filterToggle');
+const filterClose = document.querySelector('#filterClose');
+const filterDrawer = document.querySelector('#filterDrawer');
 const refresh = document.querySelector('#refresh');
 let activeId = null;
 let debounceTimer = null;
 let repoInitialized = false;
 
 const CRASH_PARTY_REPO = 'git@github.com:OutOfTheBoxProductions/crash-party-prototype.git';
+const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
@@ -20,6 +25,19 @@ function displayRepo(originUrl) {
   const match = text.match(/[:/]([^/:/]+\/[^/:/]+?)(?:\.git)?$/);
   if (match) return match[1];
   return text.replace(/\.git$/, '');
+}
+
+function customRepos() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CUSTOM_REPOS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomRepos(repos) {
+  localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
 
 function paramsFromForm() {
@@ -68,7 +86,7 @@ async function loadSessions() {
     }
 
     if (!data.length) {
-      const archiveHint = filters.archived.checked ? '' : ' Try "search archive" for older sessions.';
+      const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';
       listEl.innerHTML = `<div class="empty">No sessions match.${archiveHint}</div>`;
       return;
     }
@@ -84,11 +102,21 @@ async function loadSessions() {
 
 function updateRepoOptions(repos) {
   const previous = repoFilter.value;
+  const seen = new Set();
   const options = ['<option value="">all repos</option>'];
+
   for (const repo of repos) {
+    seen.add(repo.value);
     const selected = repo.value === previous ? ' selected' : '';
     options.push(`<option value="${escapeHtml(repo.value)}"${selected}>${escapeHtml(displayRepo(repo.value))} (${repo.count})</option>`);
   }
+
+  for (const repo of customRepos()) {
+    if (seen.has(repo)) continue;
+    const selected = repo === previous ? ' selected' : '';
+    options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (custom)</option>`);
+  }
+
   repoFilter.innerHTML = options.join('');
   if (previous && [...repoFilter.options].some((option) => option.value === previous)) repoFilter.value = previous;
 }
@@ -186,10 +214,27 @@ function scheduleLoadSessions() {
   debounceTimer = setTimeout(loadSessions, 180);
 }
 
+function setDrawerOpen(open) {
+  filterDrawer.hidden = !open;
+  filterToggle.setAttribute('aria-expanded', String(open));
+  filterToggle.classList.toggle('active', open);
+}
+
 filters.addEventListener('input', scheduleLoadSessions);
 filters.addEventListener('change', scheduleLoadSessions);
 filters.addEventListener('submit', (event) => event.preventDefault());
 refresh.addEventListener('click', () => { loadHealth(); loadSessions(); });
+filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
+filterClose.addEventListener('click', () => setDrawerOpen(false));
+addRepo.addEventListener('click', () => {
+  const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
+  if (!value) return;
+  saveCustomRepos([...customRepos(), value]);
+  repoFilter.value = value;
+  updateRepoOptions([]);
+  repoFilter.value = value;
+  loadSessions();
+});
 
 await loadHealth();
 await loadSessions();
