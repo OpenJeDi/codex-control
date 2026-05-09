@@ -246,6 +246,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 
 
 .detail-panel { display: grid; overflow: hidden; min-height: 0; }
+.detail-host { min-height: 0; height: 100%; display: grid; overflow: hidden; }
 .detail-shell { min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
 .detail-shell .detail { overflow-y: auto; overflow-x: hidden; min-height: 0; overscroll-behavior: contain; }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }

@@ -303,12 +303,15 @@ function renderSession(session) {
 async function loadDetail(id) {
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
+  detailEl.className = 'empty';
   detailEl.innerHTML = '<div class="empty">Loading thread...</div>';
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
+    detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
   } catch (error) {
+    detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
 }
