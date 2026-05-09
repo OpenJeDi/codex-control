@@ -17,6 +17,7 @@
         <div class="sidebar-actions">
           <button id="collapseSidebar" type="button" title="Hide sessions">◀</button>
           <strong>Sessions</strong>
+          <button id="newSessionButton" class="sidebar-primary" type="button">New</button>
         </div>
 
         <form id="filters" class="filters">
@@ -49,7 +50,6 @@
             </div>
           </div>
         </form>
-        <div id="repoWorktrees" class="repo-worktrees" hidden></div>
         <div id="sessionList" class="session-list"></div>
       </div>
     </section>
@@ -60,6 +60,41 @@
       <div id="detail" class="empty">Pick a session.</div>
     </section>
   </main>
+
+  <dialog id="newSessionDialog" class="modal">
+    <form id="newSessionForm" class="modal-card" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>New session</strong>
+          <p>Choose an existing worktree, or create one first.</p>
+        </div>
+        <button id="closeNewSession" type="button" title="Close">×</button>
+      </div>
+
+      <label>
+        Repo
+        <select id="newRepoSelect" name="repo"></select>
+      </label>
+
+      <label>
+        Worktree
+        <select id="newWorktreeSelect" name="cwd"></select>
+      </label>
+      <div id="newWorktreeHint" class="hint"></div>
+
+      <label>
+        First prompt <span class="muted">optional</span>
+        <textarea name="prompt" rows="4" placeholder="Start this lane with..."></textarea>
+      </label>
+
+      <div class="modal-actions">
+        <button id="createWorktreeButton" type="button">Create worktree…</button>
+        <span></span>
+        <button id="cancelNewSession" type="button">Cancel</button>
+        <button type="submit">Start session</button>
+      </div>
+    </form>
+  </dialog>
 
   <p id="status" class="sr-only" aria-live="polite">Connecting to Codex...</p>
   <script type="module" src="/app.js"></script>

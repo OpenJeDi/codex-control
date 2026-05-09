@@ -3,15 +3,22 @@ const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
 const repoFilter = document.querySelector('#repoFilter');
-const repoWorktrees = document.querySelector('#repoWorktrees');
 const filterToggle = document.querySelector('#filterToggle');
 const filterClose = document.querySelector('#filterClose');
 const filterDrawer = document.querySelector('#filterDrawer');
 const splitter = document.querySelector('#splitter');
 const collapseSidebar = document.querySelector('#collapseSidebar');
 const expandSidebar = document.querySelector('#expandSidebar');
+const newSessionButton = document.querySelector('#newSessionButton');
+const newSessionDialog = document.querySelector('#newSessionDialog');
+const newSessionForm = document.querySelector('#newSessionForm');
+const newRepoSelect = document.querySelector('#newRepoSelect');
+const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
+const newWorktreeHint = document.querySelector('#newWorktreeHint');
+const createWorktreeButton = document.querySelector('#createWorktreeButton');
+const closeNewSession = document.querySelector('#closeNewSession');
+const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
-let selectedWorktree = '';
 let debounceTimer = null;
 let detailRefreshTimer = null;
 let repoInitialized = false;
@@ -26,6 +33,22 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ 
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
+const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+
+function statusLabel(thread) {
+  const raw = statusType(thread);
+  const normalized = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return ({
+    notloaded: 'idle',
+    idle: 'idle',
+    running: 'running',
+    inprogress: 'running',
+    waitingonapproval: 'needs approval',
+    waitingonuserinput: 'needs input',
+    failed: 'failed',
+    error: 'error',
+  }[raw.toLowerCase()] ?? normalized);
+}
 
 function displayRepo(originUrl) {
   const text = String(originUrl ?? '').trim();
@@ -101,8 +124,6 @@ async function loadSessions() {
       }
     }
 
-    await loadRepoWorktrees();
-
     if (!data.length) {
       const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';
       listEl.innerHTML = `<div class="empty">No sessions match.${archiveHint}</div>`;
@@ -120,68 +141,20 @@ async function loadSessions() {
   }
 }
 
-async function loadRepoWorktrees() {
-  const repo = repoFilter.value.trim();
-  selectedWorktree = '';
-  if (!repo) {
-    repoWorktrees.hidden = true;
-    repoWorktrees.innerHTML = '';
-    return;
-  }
-
-  try {
-    const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
-    const worktrees = (data.worktrees ?? []).filter((item) => !item.bare);
-    repoWorktrees.hidden = false;
-    if (!worktrees.length) {
-      repoWorktrees.innerHTML = '<div class="repo-worktrees-title">No local worktrees found from known Codex sessions.</div>';
-      return;
-    }
-
-    selectedWorktree = worktrees[0].path;
-    repoWorktrees.innerHTML = `
-      <div class="repo-worktrees-title"><span>Worktrees</span><span>${worktrees.length}</span></div>
-      <div class="worktree-chips">
-        ${worktrees.map((item, index) => `
-          <button type="button" class="worktree-chip${index === 0 ? ' active' : ''}" title="${escapeHtml(item.path)}" data-path="${escapeHtml(item.path)}">
-            <strong>${escapeHtml(item.branch || 'detached')}</strong>
-            <span>${escapeHtml(compactPath(item.path))}</span>
-          </button>`).join('')}
-      </div>
-      <form class="new-session-form" id="newSessionForm">
-        <textarea name="prompt" rows="2" placeholder="Prompt for a new session in the selected worktree"></textarea>
-        <div class="prompt-actions">
-          <button type="button" id="addWorktree">Add worktree</button>
-          <button type="submit">Start session</button>
-        </div>
-      </form>`;
-
-    for (const chip of repoWorktrees.querySelectorAll('.worktree-chip')) {
-      chip.addEventListener('click', () => {
-        selectedWorktree = chip.dataset.path;
-        for (const other of repoWorktrees.querySelectorAll('.worktree-chip')) other.classList.toggle('active', other === chip);
-      });
-    }
-    repoWorktrees.querySelector('#newSessionForm')?.addEventListener('submit', startSessionFromSelectedWorktree);
-    repoWorktrees.querySelector('#addWorktree')?.addEventListener('click', createFeatureWorktree);
-  } catch (error) {
-    repoWorktrees.hidden = false;
-    repoWorktrees.innerHTML = `<div class="error">Worktrees unavailable: ${escapeHtml(error.message)}</div>`;
-  }
-}
-
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const prompt = new FormData(form).get('prompt');
-  if (!selectedWorktree) return window.alert('Choose a worktree first.');
+  const cwd = newWorktreeSelect.value;
+  if (!cwd) return window.alert('Choose a worktree first.');
 
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
   submit.textContent = 'Starting...';
   try {
-    const data = await jsonApi('/api/threads', { cwd: selectedWorktree, prompt });
+    const data = await jsonApi('/api/threads', { cwd, prompt });
     form.reset();
+    newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
     await loadSessions();
   } catch (error) {
@@ -193,14 +166,16 @@ async function startSessionFromSelectedWorktree(event) {
 }
 
 async function createFeatureWorktree() {
-  if (!selectedWorktree) return window.alert('Choose a source worktree first.');
+  const sourcePath = newWorktreeSelect.value;
+  if (!sourcePath) return window.alert('Choose a source worktree first.');
   const branch = window.prompt('New lowercase hyphenated branch/worktree name:');
   if (!branch) return;
   try {
-    const plan = await jsonApi('/api/worktree-plan', { sourcePath: selectedWorktree, branch });
+    const plan = await jsonApi('/api/worktree-plan', { sourcePath, branch });
     const ok = window.confirm(`Create this worktree?\n\n${plan.commands.map((command) => command.display).join('\n')}`);
     if (!ok) return;
-    await jsonApi('/api/worktrees', { sourcePath: selectedWorktree, branch, confirmed: true });
+    const created = await jsonApi('/api/worktrees', { sourcePath, branch, confirmed: true });
+    await loadNewSessionWorktrees(created.worktree?.path || created.targetPath);
     await loadSessions();
   } catch (error) {
     window.alert(error.message);
@@ -227,6 +202,56 @@ function updateRepoOptions(repos) {
   options.push('<option value="__add_repo__">+ Add repo...</option>');
   repoFilter.innerHTML = options.join('');
   if (previous && [...repoFilter.options].some((option) => option.value === previous)) repoFilter.value = previous;
+  syncNewSessionRepoOptions();
+}
+
+function syncNewSessionRepoOptions() {
+  const previous = newRepoSelect.value || repoFilter.value;
+  const options = [...repoFilter.options]
+    .filter((option) => option.value && option.value !== '__add_repo__')
+    .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.textContent)}</option>`);
+  newRepoSelect.innerHTML = options.join('');
+  if (previous && [...newRepoSelect.options].some((option) => option.value === previous)) newRepoSelect.value = previous;
+}
+
+async function openNewSessionDialog() {
+  syncNewSessionRepoOptions();
+  if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
+  newSessionDialog.showModal();
+  await loadNewSessionWorktrees();
+}
+
+async function loadNewSessionWorktrees(preferredPath = '') {
+  const repo = newRepoSelect.value.trim();
+  newWorktreeSelect.innerHTML = '';
+  newWorktreeHint.textContent = '';
+  createWorktreeButton.disabled = true;
+  if (!repo) {
+    newWorktreeHint.textContent = 'Choose a repo first.';
+    return;
+  }
+
+  try {
+    newWorktreeSelect.innerHTML = '<option value="">Loading worktrees...</option>';
+    const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
+    const worktrees = (data.worktrees ?? []).filter((item) => !item.bare);
+    if (!worktrees.length) {
+      newWorktreeSelect.innerHTML = '<option value="">No local worktrees found</option>';
+      newWorktreeHint.textContent = 'No known local worktree yet. Open an existing Codex session for this repo first, or add the repo from a known lane.';
+      return;
+    }
+
+    newWorktreeSelect.innerHTML = worktrees.map((item) => {
+      const branch = item.branch || 'detached';
+      return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}</option>`;
+    }).join('');
+    if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
+    createWorktreeButton.disabled = false;
+    newWorktreeHint.textContent = `${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} available.`;
+  } catch (error) {
+    newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';
+    newWorktreeHint.textContent = error.message;
+  }
 }
 
 function renderBranchGroups(sessions) {
@@ -253,12 +278,13 @@ function renderSession(session) {
   const source = session.source || 'unknown';
   const cwd = compactPath(session.cwd);
   const repo = displayRepo(session.gitInfo?.originUrl);
-  const status = statusType(session);
+  const status = statusLabel(session);
+  const statusCss = statusClass(session);
   return `
     <button class="session${active}" data-id="${escapeHtml(session.id)}">
       <div class="session-title">
         <span>${escapeHtml(session.name || '(unnamed)')}</span>
-        <span class="badge status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+        <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
       </div>
       <div class="session-preview">${escapeHtml(session.preview || '')}</div>
       <div class="meta">
@@ -285,7 +311,8 @@ async function loadDetail(id) {
 }
 
 function renderDetail({ thread, turns }) {
-  const status = statusType(thread);
+  const status = statusLabel(thread);
+  const statusCss = statusClass(thread);
   return `<div class="detail-shell">
     <div class="detail">
       <div class="detail-head">
@@ -293,7 +320,7 @@ function renderDetail({ thread, turns }) {
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
         </div>
-        <span class="badge status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+        <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
       </div>
       <div class="kv">
         <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
@@ -463,6 +490,12 @@ repoFilter.addEventListener('change', () => {
   repoFilter.value = value;
   loadSessions();
 });
+newSessionButton.addEventListener('click', openNewSessionDialog);
+newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
+newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
+createWorktreeButton.addEventListener('click', createFeatureWorktree);
+closeNewSession.addEventListener('click', () => newSessionDialog.close());
+cancelNewSession.addEventListener('click', () => newSessionDialog.close());
 collapseSidebar.addEventListener('click', () => setSidebarCollapsed(true));
 expandSidebar.addEventListener('click', () => setSidebarCollapsed(false));
 splitter.addEventListener('pointerdown', (event) => {
