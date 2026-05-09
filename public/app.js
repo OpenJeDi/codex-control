@@ -104,6 +104,8 @@ async function loadSessions() {
     for (const button of listEl.querySelectorAll('.session')) {
       button.addEventListener('click', () => loadDetail(button.dataset.id));
     }
+    if (!activeId && data[0]?.id) await loadDetail(data[0].id);
+    else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeId);
   } catch (error) {
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
