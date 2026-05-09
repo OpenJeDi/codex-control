@@ -495,10 +495,94 @@ function hasRenderableMedia(item) {
   return Array.isArray(item.parts) && item.parts.some((part) => part.type === 'image');
 }
 
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function renderInlineMarkdown(text) {
+  const codeSpans = [];
+  let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
+    const token = `@@CODE${codeSpans.length}@@`;
+    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
+  html = escapeHtml(html);
+  html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
+  return html;
+}
+
+function renderMarkdownBlocks(text) {
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${list.type}>`);
+    list = null;
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length + 2;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      if (!list || list.type !== 'ul') list = { type: 'ul', items: [] };
+      list.items.push(bullet[1]);
+      continue;
+    }
+    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (numbered) {
+      flushParagraph();
+      if (!list || list.type !== 'ol') list = { type: 'ol', items: [] };
+      list.items.push(numbered[1]);
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  flushParagraph();
+  flushList();
+  return blocks.join('') || '<p></p>';
+}
+
+function renderMarkdownText(text) {
+  const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
+  return `<div class="markdown-body">${segments.map((segment, index) => {
+    if (index % 2 === 1) return `<pre class="md-code"><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
+    return renderMarkdownBlocks(segment);
+  }).join('')}</div>`;
+}
+
+function shouldRenderMarkdown(item) {
+  return item.type === 'userMessage' || item.type === 'agentMessage' || item.type === 'reasoning';
+}
+
 function renderContentParts(item, fallbackBody) {
-  if (!Array.isArray(item.parts) || !item.parts.length) return `<pre>${escapeHtml(fallbackBody)}</pre>`;
+  const renderText = (text) => shouldRenderMarkdown(item) ? renderMarkdownText(text) : `<pre>${escapeHtml(text)}</pre>`;
+  if (!Array.isArray(item.parts) || !item.parts.length) return renderText(fallbackBody);
   return item.parts.map((part) => {
-    if (part.type === 'text') return part.text ? `<pre>${escapeHtml(part.text)}</pre>` : '';
+    if (part.type === 'text') return part.text ? renderText(part.text) : '';
     if (part.type === 'image') {
       return `<figure class="session-image"><img src="${escapeHtml(part.src)}" alt="Attached session image" loading="lazy"><figcaption>${escapeHtml(part.contentType || 'image')}</figcaption></figure>`;
     }

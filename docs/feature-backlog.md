@@ -69,7 +69,7 @@ Status: not implemented yet unless noted in `docs/implementation-status.md`.
 
 ## Transcript rendering polish
 
-- Add a good safe Markdown renderer for normal user/agent text.
+- Improve the basic safe Markdown renderer: richer tables/blockquotes/task lists if they become useful, without making command/raw payload rendering noisy.
 - Improve existing session image rendering polish later: captions, sizing, multiple-image layout, and non-data image sources. Basic Codex structured image parts now render; this remains separate from Markdown rendering.
 - Keep commands, file changes, raw JSON, and large/noisy payloads collapsible in monospace.
 - Preserve inspectability while making normal Codex replies pleasant to read.
