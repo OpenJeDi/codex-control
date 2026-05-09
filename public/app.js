@@ -35,6 +35,7 @@ const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Upd
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+const busyStatusTypes = new Set(['externalactive', 'running', 'inprogress']);
 
 function ageLabel(seconds) {
   const timestamp = Number(seconds) * 1000;
@@ -67,6 +68,10 @@ function statusLabel(thread) {
     failed: 'failed',
     error: 'error',
   }[raw.toLowerCase()] ?? normalized);
+}
+
+function isBusyThread(thread) {
+  return busyStatusTypes.has(statusClass(thread));
 }
 
 function isNearBottom(el, threshold = 120) {
@@ -409,6 +414,7 @@ function renderDetail({ thread, turns }) {
         <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
       </div>
       ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
+      ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
     <form class="prompt-bar" id="promptForm">
@@ -421,6 +427,15 @@ function renderDetail({ thread, turns }) {
         <button type="submit">Send</button>
       </div>
     </form>
+  </div>`;
+}
+
+function renderBusyIndicator(thread) {
+  if (!isBusyThread(thread)) return '';
+  return `<div class="busy-indicator" role="status" aria-live="polite">
+    <span class="busy-line"></span>
+    <span class="busy-label">Agent working</span>
+    <span class="busy-dots" aria-hidden="true"><span></span><span></span><span></span></span>
   </div>`;
 }
 
