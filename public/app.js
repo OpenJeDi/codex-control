@@ -483,11 +483,28 @@ function itemLabel(item) {
 }
 
 function looksNoisy(item, body) {
+  if (hasRenderableMedia(item)) return false;
   if (item.type === 'commandExecution') return true;
   if (String(item.type).toLowerCase().includes('file')) return true;
   if (body.length > 1200) return true;
   const trimmed = body.trim();
   return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
+function hasRenderableMedia(item) {
+  return Array.isArray(item.parts) && item.parts.some((part) => part.type === 'image');
+}
+
+function renderContentParts(item, fallbackBody) {
+  if (!Array.isArray(item.parts) || !item.parts.length) return `<pre>${escapeHtml(fallbackBody)}</pre>`;
+  return item.parts.map((part) => {
+    if (part.type === 'text') return part.text ? `<pre>${escapeHtml(part.text)}</pre>` : '';
+    if (part.type === 'image') {
+      return `<figure class="session-image"><img src="${escapeHtml(part.src)}" alt="Attached session image" loading="lazy"><figcaption>${escapeHtml(part.contentType || 'image')}</figcaption></figure>`;
+    }
+    if (part.type === 'unsupportedImage') return '<div class="unsupported-media">Image omitted: unsupported source</div>';
+    return '';
+  }).join('');
 }
 
 function renderItem(item) {
@@ -512,7 +529,7 @@ function renderItem(item) {
 
   return `<article class="item ${escapeHtml(item.type)}">
     <div class="item-type">${escapeHtml(label)}</div>
-    <pre>${escapeHtml(body)}</pre>
+    ${renderContentParts(item, body)}
   </article>`;
 }
 

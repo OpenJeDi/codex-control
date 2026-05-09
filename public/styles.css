@@ -239,6 +239,9 @@ body.sidebar-collapsed .splitter { display: none; }
 .compact-item summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact-item pre { margin-top: 10px; max-height: 420px; overflow: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.session-image { margin: 10px 0 0; display: grid; gap: 6px; }
+.session-image img { max-width: min(100%, 760px); max-height: 520px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); object-fit: contain; }
+.session-image figcaption, .unsupported-media { color: var(--muted); font-size: 11px; }
 .busy-indicator { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; padding: 8px 2px 2px; color: var(--muted); font-size: 12px; }
 .busy-label { white-space: nowrap; }
 .busy-dots { display: inline-flex; gap: 4px; align-items: center; }

@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch } from 'node:fs';
@@ -13,6 +13,7 @@ const publicDir = path.join(rootDir, 'public');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
 const maxBodyBytes = 75 * 1024 * 1024;
+const mediaById = new Map();
 
 class CodexAppServer {
   constructor() {
@@ -337,7 +338,36 @@ function compactTurn(turn) {
 
 function textFromContent(content) {
   if (!Array.isArray(content)) return '';
-  return content.map((part) => part?.text ?? part?.value ?? '').filter(Boolean).join('\n');
+  return content
+    .filter((part) => part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value)
+    .map((part) => part?.text ?? part?.value ?? '')
+    .filter(Boolean)
+    .join('\n');
+}
+
+function mediaFromDataUrl(dataUrl) {
+  const match = String(dataUrl ?? '').match(/^data:([^;,]+);base64,(.+)$/s);
+  if (!match) return null;
+  const [, contentType, encoded] = match;
+  const id = createHash('sha256').update(dataUrl).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, data: Buffer.from(encoded, 'base64') });
+  return { type: 'image', src: `/api/media/${id}`, contentType };
+}
+
+function compactContentParts(content) {
+  if (!Array.isArray(content)) return [];
+  return content.map((part) => {
+    const type = String(part?.type ?? '').toLowerCase();
+    if (type === 'text' || type === 'input_text' || part?.text || part?.value) {
+      const text = part?.text ?? part?.value ?? '';
+      return text ? { type: 'text', text: truncate(text) } : null;
+    }
+    if (type === 'image' || type === 'input_image') {
+      const media = mediaFromDataUrl(part?.url ?? part?.image_url);
+      return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
+    }
+    return null;
+  }).filter(Boolean);
 }
 
 function truncate(value, max = 12000) {
@@ -349,7 +379,7 @@ function compactItem(item) {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)) };
+  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
   if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(item.text) };
   if (type === 'commandExecution') {
     return {
@@ -614,6 +644,20 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+function sendMedia(res, id) {
+  const media = mediaById.get(id);
+  if (!media) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('Media not found');
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': media.contentType,
+    'cache-control': 'no-store',
+  });
+  res.end(media.data);
+}
+
 async function serveStatic(req, res, url) {
   const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
   const filePath = path.normalize(path.join(publicDir, pathname));
@@ -643,6 +687,12 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/health') {
       const info = await codex.ready;
       sendJson(res, 200, { ok: true, ...info });
+      return;
+    }
+
+    const mediaMatch = url.pathname.match(/^\/api\/media\/([a-f0-9]+)$/);
+    if (mediaMatch && req.method === 'GET') {
+      sendMedia(res, mediaMatch[1]);
       return;
     }
 
