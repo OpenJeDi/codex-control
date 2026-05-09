@@ -200,6 +200,13 @@ body.sidebar-collapsed .splitter { display: none; }
 .session-title { display: flex; align-items: start; justify-content: space-between; gap: 12px; font-weight: 650; }
 .session-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-flags { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.session-age {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
 .info-dot {
   display: inline-grid;
   place-items: center;

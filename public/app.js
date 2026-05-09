@@ -31,15 +31,33 @@ const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
+const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+
+function ageLabel(seconds) {
+  const timestamp = Number(seconds) * 1000;
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < 30 * 1000) return 'now';
+  if (diff < 90 * 1000) return '1m ago';
+  if (diff < hour) return `${Math.round(diff / minute)}m ago`;
+  if (diff < 90 * minute) return '1h ago';
+  if (diff < day) return `${Math.round(diff / hour)}h ago`;
+  if (diff < 2 * day) return '1d ago';
+  if (diff < 30 * day) return `${Math.round(diff / day)}d ago`;
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 function statusLabel(thread) {
   const raw = statusType(thread);
   const normalized = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   return ({
-    notloaded: 'idle',
+    notloaded: 'not loaded',
     idle: 'idle',
     externalactive: 'active',
     running: 'running',
@@ -132,6 +150,7 @@ async function loadSessions() {
     }
 
     listEl.innerHTML = filters.groupBranch.checked ? renderBranchGroups(data) : data.map(renderSession).join('');
+    refreshAgeIndicators();
     for (const button of listEl.querySelectorAll('.session')) {
       button.addEventListener('click', () => loadDetail(button.dataset.id));
     }
@@ -281,6 +300,7 @@ function renderSession(session) {
   const repo = displayRepo(session.gitInfo?.originUrl);
   const status = statusLabel(session);
   const statusCss = statusClass(session);
+  const age = ageLabel(session.updatedAt);
   const info = [
     ['Source', source],
     ['Repo', repo],
@@ -295,10 +315,19 @@ function renderSession(session) {
         <span>${escapeHtml(session.name || '(unnamed)')}</span>
         <span class="session-flags">
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+          ${age ? `<span class="session-age" data-updated-at="${escapeHtml(session.updatedAt)}" title="${escapeHtml(updatedTitle(session.updatedAt))}">${escapeHtml(age)}</span>` : ''}
           <span class="info-dot" aria-label="Session info">i</span>
         </span>
       </div>
     </button>`;
+}
+
+function refreshAgeIndicators() {
+  for (const el of document.querySelectorAll('.session-age[data-updated-at]')) {
+    const seconds = Number(el.dataset.updatedAt);
+    el.textContent = ageLabel(seconds);
+    el.title = updatedTitle(seconds);
+  }
 }
 
 async function loadDetail(id) {
@@ -524,5 +553,6 @@ splitter.addEventListener('pointerup', () => {
 });
 applySavedLayout();
 connectEvents();
+setInterval(refreshAgeIndicators, 30 * 1000);
 await loadHealth();
 await loadSessions();
