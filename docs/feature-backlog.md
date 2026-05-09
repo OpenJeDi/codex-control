@@ -49,3 +49,10 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Before rollback, show a warning and current worktree dirty state/diff summary when possible.
 - Longer term, pair session rollback with optional git/file rollback helpers so model-made changes can be reverted deliberately.
 - Do not prioritize forking; it does not fit the intended JeDi/Brain workflow unless a clear use case appears later.
+
+## Explicitly out of current scope
+
+- Do not handle skills, plugins, MCP, or hooks for now.
+- Do not handle review workflows for now.
+- Do not expose the Codex FileSystem API as a general UI for now.
+- Revisit these only after the core session list, prompt bar, live status/events, worktree/session creation, and instruction/model controls are solid.
