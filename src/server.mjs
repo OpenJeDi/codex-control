@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -104,10 +104,12 @@ class CodexAppServer {
     this.statusByThread.set(String(threadId), normalizeStatus(status));
   }
 
-  decorateThread(thread) {
+  async decorateThread(thread) {
     if (!thread?.id) return thread;
     const remembered = this.statusByThread.get(String(thread.id));
-    return remembered ? { ...thread, status: remembered } : thread;
+    if (remembered) return { ...thread, status: remembered };
+    const external = await inferExternalThreadStatus(thread);
+    return external ? { ...thread, status: external } : thread;
   }
 
   request(method, params = {}, timeoutMs = 15000) {
@@ -130,7 +132,7 @@ class CodexAppServer {
   async listThreads({ includeArchived = false } = {}) {
     await this.ready;
     const result = await this.request('thread/list', { includeArchived });
-    return (result.data ?? []).map((thread) => this.decorateThread(thread));
+    return Promise.all((result.data ?? []).map((thread) => this.decorateThread(thread)));
   }
 
   async readThread(threadId) {
@@ -140,7 +142,7 @@ class CodexAppServer {
       this.request('thread/turns/list', { threadId }),
     ]);
     return {
-      thread: this.decorateThread(read.thread),
+      thread: await this.decorateThread(read.thread),
       turns: (turns.data ?? []).map(compactTurn),
     };
   }
@@ -149,7 +151,7 @@ class CodexAppServer {
     await this.ready;
     const result = await this.request('thread/start', { cwd }, 30000);
     if (result.thread) this.rememberStatus('thread/started', { thread: result.thread });
-    return { ...result, thread: this.decorateThread(result.thread) };
+    return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
   async startTurn(threadId, input) {
@@ -179,6 +181,60 @@ function normalizeStatus(status) {
   if (!status) return { type: 'idle' };
   if (typeof status === 'string') return { type: status };
   return { ...status, type: status.type ?? 'idle' };
+}
+
+const terminalRolloutEvents = new Set([
+  'task_complete',
+  'turn_complete',
+  'turn_completed',
+  'completed',
+  'error',
+]);
+
+async function inferExternalThreadStatus(thread) {
+  const currentType = String(thread?.status?.type ?? '').toLowerCase();
+  if (currentType && currentType !== 'notloaded') return null;
+
+  const filePath = thread?.path;
+  if (!filePath || !existsSync(filePath)) return null;
+
+  try {
+    const last = await readLastRolloutEvent(filePath);
+    if (!last) return null;
+    const eventType = String(last.payload?.type ?? last.type ?? '').toLowerCase();
+    if (terminalRolloutEvents.has(eventType)) return null;
+
+    const lastMs = Date.parse(last.timestamp ?? '');
+    if (!Number.isFinite(lastMs)) return null;
+    const ageMs = Date.now() - lastMs;
+    if (ageMs < 0 || ageMs > 20 * 60 * 1000) return null;
+
+    return { type: 'externalActive', source: 'rollout-tail', lastEvent: eventType };
+  } catch {
+    return null;
+  }
+}
+
+async function readLastRolloutEvent(filePath) {
+  const handle = await open(filePath, 'r');
+  try {
+    const stat = await handle.stat();
+    const length = Math.min(stat.size, 128 * 1024);
+    if (!length) return null;
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, stat.size - length);
+    const lines = buffer.toString('utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        return JSON.parse(lines[index]);
+      } catch {
+        // The first line in the chunk may be partial; keep walking backward.
+      }
+    }
+    return null;
+  } finally {
+    await handle.close();
+  }
 }
 
 function execFileText(command, args, options = {}) {

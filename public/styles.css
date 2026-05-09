@@ -251,7 +251,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .detail-shell .detail { overflow-y: auto; overflow-x: hidden; min-height: 0; overscroll-behavior: contain; }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
 .status { text-transform: lowercase; }
-.status.running, .status.inprogress { border-color: rgba(143, 188, 143, 0.6); color: var(--accent); }
+.status.running, .status.inprogress, .status.externalactive { border-color: rgba(143, 188, 143, 0.6); color: var(--accent); }
 .status.waitingonapproval, .status.waitingonuserinput { border-color: rgba(216, 181, 109, 0.65); color: var(--warn); }
 .status.error, .status.failed { border-color: rgba(212, 135, 135, 0.65); color: var(--danger); }
 .prompt-bar { display: grid; gap: 8px; }

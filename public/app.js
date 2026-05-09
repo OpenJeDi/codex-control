@@ -41,6 +41,7 @@ function statusLabel(thread) {
   return ({
     notloaded: 'idle',
     idle: 'idle',
+    externalactive: 'active',
     running: 'running',
     inprogress: 'running',
     waitingonapproval: 'needs approval',
