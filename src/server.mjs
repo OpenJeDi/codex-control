@@ -22,7 +22,6 @@ class CodexAppServer {
     this.eventClients = new Set();
     this.watchers = [];
     this.threadsChangedTimer = null;
-    this.lastThreadsChangedAt = 0;
     this.pendingChangedThreadIds = new Set();
     this.ready = this.start();
   }
@@ -200,15 +199,12 @@ class CodexAppServer {
   scheduleThreadsChanged(payload = {}) {
     if (payload.threadId) this.pendingChangedThreadIds.add(String(payload.threadId));
     if (this.threadsChangedTimer) return;
-    const elapsed = Date.now() - this.lastThreadsChangedAt;
-    const delay = Math.max(250, 4000 - elapsed);
     this.threadsChangedTimer = setTimeout(() => {
       this.threadsChangedTimer = null;
-      this.lastThreadsChangedAt = Date.now();
       const threadIds = [...this.pendingChangedThreadIds];
       this.pendingChangedThreadIds.clear();
       this.broadcast('threads-changed', { source: payload.source, threadId: threadIds[0] ?? null, threadIds });
-    }, delay);
+    }, 350);
   }
 }
 

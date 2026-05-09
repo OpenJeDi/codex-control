@@ -492,7 +492,8 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 function connectEvents() {
   const refreshForThread = (threadId, { refreshDetailOnUnknown = false } = {}) => {
     scheduleLoadSessions();
-    if (threadId === activeId || (!threadId && refreshDetailOnUnknown)) scheduleDetailRefresh(activeId, 700);
+    if (threadId === activeId) scheduleDetailRefresh(activeId, 150);
+    else if (!threadId && refreshDetailOnUnknown) scheduleDetailRefresh(activeId, 500);
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
