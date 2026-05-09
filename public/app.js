@@ -383,6 +383,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
+    detailEl.querySelector('[data-action=steer-turn]')?.addEventListener('click', () => steerTurn(id));
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -408,7 +409,7 @@ function renderDetail({ thread, turns }) {
         </div>
         <div class="detail-actions">
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
-          ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
+          ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
         </div>
       </div>
       <div class="kv">
@@ -432,7 +433,7 @@ function renderDetail({ thread, turns }) {
           <input name="files" type="file" multiple>
           <span>+</span>
         </label>
-        <button type="submit">Send</button>
+        <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
     </form>
   </div>`;
@@ -444,6 +445,35 @@ function renderBusyIndicator(thread) {
     <span class="busy-label">Agent working</span>
     <span class="busy-dots" aria-hidden="true"><span></span><span></span><span></span></span>
   </div>`;
+}
+
+async function steerTurn(id) {
+  const form = detailEl.querySelector('#promptForm');
+  const button = detailEl.querySelector('[data-action=steer-turn]');
+  const formData = new FormData(form);
+  if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
+    window.alert('Enter guidance or attach a file to steer.');
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Steering...';
+  }
+  try {
+    await fetch(`/api/threads/${encodeURIComponent(id)}/steer`, { method: 'POST', body: formData }).then(async (res) => {
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    });
+    form.reset();
+    scheduleDetailRefresh(id, 250);
+  } catch (error) {
+    window.alert(error.message);
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Steer';
+    }
+  }
 }
 
 async function interruptTurn(id) {
@@ -494,8 +524,16 @@ function renderTurn(turn, index) {
   return `<section class="turn ${escapeHtml(status)}">
     <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
     ${turn.items.map(renderItem).join('')}
+    ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
     ${renderTurnBreak(turn)}
   </section>`;
+}
+
+function renderSteeredMessage(message) {
+  return `<div class="steer-note">
+    <div class="steer-title">Steered into current run</div>
+    ${renderMarkdownText(message.text)}
+  </div>`;
 }
 
 function renderTurnBreak(turn) {

@@ -21,6 +21,7 @@ class CodexAppServer {
     this.pending = new Map();
     this.statusByThread = new Map();
     this.activeTurnByThread = new Map();
+    this.steeredMessagesByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
     this.threadsChangedTimer = null;
@@ -157,7 +158,7 @@ class CodexAppServer {
     }
     return {
       thread: await this.decorateThread(read.thread),
-      turns: (turns.data ?? []).map(compactTurn),
+      turns: (turns.data ?? []).map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(String(threadId)) ?? [])),
     };
   }
 
@@ -176,6 +177,21 @@ class CodexAppServer {
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
     return result;
+  }
+
+  async steerTurn(threadId, input) {
+    await this.ready;
+    const turnId = await this.activeTurnId(threadId);
+    if (!turnId) throw new Error('No active turn found for this thread.');
+    const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000);
+    const text = textFromContent(input);
+    if (text) {
+      const key = String(threadId);
+      const current = this.steeredMessagesByThread.get(key) ?? [];
+      this.steeredMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+    }
+    this.broadcast('codex-notification', { method: 'turn/steered', params: { threadId, turnId } });
+    return { ...result, threadId, turnId };
   }
 
   async interruptTurn(threadId) {
@@ -373,7 +389,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn) {
+function compactTurn(turn, steeredMessages = []) {
   return {
     id: turn.id,
     status: turn.status,
@@ -381,6 +397,7 @@ function compactTurn(turn) {
     startedAt: turn.startedAt,
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
+    steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
     items: (turn.items ?? []).map(compactItem),
   };
 }
@@ -796,6 +813,15 @@ const server = createServer(async (req, res) => {
       const data = await codex.readThread(threadId);
       const input = await buildTurnInput(threadId, data.thread, req);
       sendJson(res, 200, await codex.startTurn(threadId, input));
+      return;
+    }
+
+    const steerMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/steer$/);
+    if (steerMatch && req.method === 'POST') {
+      const threadId = decodeURIComponent(steerMatch[1]);
+      const data = await codex.readThread(threadId);
+      const input = await buildTurnInput(threadId, data.thread, req);
+      sendJson(res, 200, await codex.steerTurn(threadId, input));
       return;
     }
 

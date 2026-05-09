@@ -234,6 +234,8 @@ body.sidebar-collapsed .splitter { display: none; }
 .item { margin: 10px 0; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.035); border: 1px solid var(--line); }
 .item.userMessage { border-color: rgba(143, 188, 143, 0.32); }
 .item.agentMessage { border-color: rgba(190, 190, 190, 0.24); }
+.steer-note { margin: 10px 0; padding: 10px 12px; border: 1px dashed rgba(126, 183, 255, 0.45); border-radius: 12px; background: rgba(126, 183, 255, 0.055); }
+.steer-title { color: var(--accent-2); font-size: 12px; font-weight: 750; margin-bottom: 6px; }
 .item.commandExecution { border-color: rgba(216, 181, 109, 0.28); }
 .item-type { color: var(--muted); font-size: 12px; margin-bottom: 6px; font-weight: 700; }
 .compact-item { padding: 0; overflow: hidden; }
