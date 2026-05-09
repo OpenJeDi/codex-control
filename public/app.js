@@ -387,6 +387,8 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
+    detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
+    detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => archiveThread(id));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
     detailEl.querySelector('[data-action=steer-turn]')?.addEventListener('click', () => steerTurn(id));
     bindDetailScrollControls();
@@ -414,6 +416,8 @@ function renderDetail({ thread, turns, queuedMessages = [] }) {
         </div>
         <div class="detail-actions">
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+          <button type="button" data-action="rename-thread">Rename</button>
+          <button type="button" data-action="archive-thread">Archive</button>
           ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
         </div>
       </div>
@@ -462,6 +466,25 @@ function renderQueuedMessages(messages = []) {
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
     </div>`).join('')}
   </div>`;
+}
+
+async function renameThread(id, thread) {
+  const current = thread?.name || '';
+  const name = window.prompt('Session name:', current);
+  if (name === null) return;
+  await jsonApi(`/api/threads/${encodeURIComponent(id)}/name`, { name });
+  scheduleDetailRefresh(id, 150);
+  scheduleLoadSessions();
+}
+
+async function archiveThread(id) {
+  const ok = window.confirm('Archive this session? You can include archived sessions from the filter drawer later.');
+  if (!ok) return;
+  await jsonApi(`/api/threads/${encodeURIComponent(id)}/archive`, {});
+  activeId = null;
+  detailEl.className = 'detail empty';
+  detailEl.textContent = 'Session archived.';
+  scheduleLoadSessions();
 }
 
 async function steerTurn(id) {

@@ -10,7 +10,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Account and rate-limit visibility.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
-- Thread controls: fork, rollback, compact, archive, rename. Interrupt/Stop is implemented for active turns.
+- Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop is implemented for active turns.
 - Richer live streaming / follow view.
 
 ## Live observability / status chrome
@@ -39,8 +39,8 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 
 ## Session management actions
 
-- Support obvious session rename action, backed by `thread/setName` / thread metadata updates as appropriate.
-- Support obvious archive/unarchive actions in the session list/detail UI.
+- Implemented: obvious session rename action backed by verified `thread/name/set` with `{ threadId, name }`.
+- Implemented: archive from the detail UI backed by verified `thread/archive` with `{ threadId }`; unarchive is available through the API and the archive filter/recovery path, but not yet polished as an obvious list-row action.
 - Archived sessions should stay hidden from normal results unless archive search/filter is explicitly enabled.
 - Make destructive-ish actions reversible where possible and confirm only when the consequence is not obvious.
 

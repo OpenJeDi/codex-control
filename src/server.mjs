@@ -216,6 +216,30 @@ class CodexAppServer {
     return { ...result, threadId, turnId };
   }
 
+  async setThreadName(threadId, name) {
+    await this.ready;
+    const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000);
+    this.broadcast('codex-notification', { method: 'thread/name/set', params: { threadId, name } });
+    this.scheduleThreadsChanged({ source: 'thread/name/set', threadId });
+    return result;
+  }
+
+  async archiveThread(threadId) {
+    await this.ready;
+    const result = await this.request('thread/archive', { threadId }, 15000);
+    this.broadcast('codex-notification', { method: 'thread/archive', params: { threadId } });
+    this.scheduleThreadsChanged({ source: 'thread/archive', threadId });
+    return result;
+  }
+
+  async unarchiveThread(threadId) {
+    await this.ready;
+    const result = await this.request('thread/unarchive', { threadId }, 15000);
+    this.broadcast('codex-notification', { method: 'thread/unarchive', params: { threadId } });
+    this.scheduleThreadsChanged({ source: 'thread/unarchive', threadId });
+    return result;
+  }
+
   async interruptTurn(threadId) {
     await this.ready;
     const turnId = await this.activeTurnId(threadId);
@@ -857,6 +881,25 @@ const server = createServer(async (req, res) => {
         await codex.startTurn(threadId, input);
       }
       sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
+      return;
+    }
+
+    const nameMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/name$/);
+    if (nameMatch && req.method === 'POST') {
+      const body = await readJson(req);
+      sendJson(res, 200, await codex.setThreadName(decodeURIComponent(nameMatch[1]), body.name));
+      return;
+    }
+
+    const archiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/archive$/);
+    if (archiveMatch && req.method === 'POST') {
+      sendJson(res, 200, await codex.archiveThread(decodeURIComponent(archiveMatch[1])));
+      return;
+    }
+
+    const unarchiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/unarchive$/);
+    if (unarchiveMatch && req.method === 'POST') {
+      sendJson(res, 200, await codex.unarchiveThread(decodeURIComponent(unarchiveMatch[1])));
       return;
     }
 
