@@ -16,8 +16,9 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 ## Live observability / status chrome
 
 - Show account usage info permanently but subtly, for example a compact status pill with account tier, quota/usage, current model, and reset date.
-- Add a dedicated Live Events tab for following Codex app-server events as they happen.
-- Use subtle colors and icons to distinguish event types clearly, for example status changes, turn start/finish, agent text deltas, command output, file changes, approvals, warnings, and errors.
+- Implemented: compact Recent events block in the detail view for useful in-memory thread/turn/control events.
+- Follow-up: add a dedicated Live Events tab only if the compact block is not enough.
+- Follow-up: use subtle colors/icons for status changes, turn start/finish, approvals, warnings, and errors; keep agent deltas/token-usage noise out of the main timeline.
 - Keep the event stream useful for diagnosis without turning the main session transcript into noisy plumbing.
 
 ## Session model controls

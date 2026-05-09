@@ -259,6 +259,22 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .markdown-body .md-code code { padding: 0; border: 0; background: transparent; }
 .markdown-body a { color: var(--accent-2); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
+
+.event-timeline {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.event-title { color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: 0.04em; }
+.event-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 12px; color: var(--text); }
+.event-row time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.event-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-row code { color: var(--muted); font-size: 11px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; }
+
 .busy-indicator { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; padding: 8px 2px 2px; color: var(--muted); font-size: 12px; }
 .busy-label { white-space: nowrap; }
 .busy-dots { display: inline-flex; gap: 4px; align-items: center; }

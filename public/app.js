@@ -31,6 +31,7 @@ const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
+const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
@@ -404,7 +405,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
 }
 
-function renderDetail({ thread, turns, queuedMessages = [] }) {
+function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
   return `<div class="detail-shell">
@@ -431,6 +432,7 @@ function renderDetail({ thread, turns, queuedMessages = [] }) {
         <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
         <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
       </div>
+      ${renderEventTimeline(events)}
       ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
       ${renderBusyIndicator(thread)}
     </div>
@@ -447,6 +449,19 @@ function renderDetail({ thread, turns, queuedMessages = [] }) {
       </div>
     </form>
   </div>`;
+}
+
+function renderEventTimeline(events = []) {
+  const visible = events.slice(-10).reverse();
+  if (!visible.length) return '';
+  return `<section class="event-timeline" aria-label="Recent session events">
+    <div class="event-title">Recent events</div>
+    ${visible.map((event) => `<div class="event-row">
+      <time>${escapeHtml(fmtMillis(event.at))}</time>
+      <span>${escapeHtml(event.message || event.method || 'Event')}</span>
+      ${event.turnId ? `<code title="${escapeHtml(event.turnId)}">${escapeHtml(event.turnId.slice(0, 8))}</code>` : ''}
+    </div>`).join('')}
+  </section>`;
 }
 
 function renderBusyIndicator(thread) {

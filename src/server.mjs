@@ -23,6 +23,7 @@ class CodexAppServer {
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
     this.steeredMessagesByThread = new Map();
+    this.eventsByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
     this.threadsChangedTimer = null;
@@ -94,6 +95,7 @@ class CodexAppServer {
     const method = message.method;
     const params = message.params ?? {};
     this.rememberStatus(method, params);
+    this.rememberEvent(method, params);
     this.broadcast('codex-notification', { method, params });
   }
 
@@ -167,6 +169,7 @@ class CodexAppServer {
       thread: await this.decorateThread(read.thread),
       turns: turnData.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
       queuedMessages: this.queuedMessagesByThread.get(key) ?? [],
+      events: this.eventsByThread.get(key) ?? [],
     };
   }
 
@@ -191,12 +194,14 @@ class CodexAppServer {
     if (activeBefore && turnId && String(activeBefore) !== String(turnId)) {
       this.addQueuedMessage(threadId, turnId, input);
       this.statusByThread.set(String(threadId), { type: 'running' });
+      this.rememberEvent('turn/queued', { threadId, turnId });
       this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId } });
       return result;
     }
 
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
+    this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
     return result;
   }
@@ -212,6 +217,7 @@ class CodexAppServer {
       const current = this.steeredMessagesByThread.get(key) ?? [];
       this.steeredMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
     }
+    this.rememberEvent('turn/steered', { threadId, turnId });
     this.broadcast('codex-notification', { method: 'turn/steered', params: { threadId, turnId } });
     return { ...result, threadId, turnId };
   }
@@ -219,6 +225,7 @@ class CodexAppServer {
   async setThreadName(threadId, name) {
     await this.ready;
     const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000);
+    this.rememberEvent('thread/name/set', { threadId, name });
     this.broadcast('codex-notification', { method: 'thread/name/set', params: { threadId, name } });
     this.scheduleThreadsChanged({ source: 'thread/name/set', threadId });
     return result;
@@ -227,6 +234,7 @@ class CodexAppServer {
   async archiveThread(threadId) {
     await this.ready;
     const result = await this.request('thread/archive', { threadId }, 15000);
+    this.rememberEvent('thread/archive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/archive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/archive', threadId });
     return result;
@@ -235,6 +243,7 @@ class CodexAppServer {
   async unarchiveThread(threadId) {
     await this.ready;
     const result = await this.request('thread/unarchive', { threadId }, 15000);
+    this.rememberEvent('thread/unarchive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/unarchive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/unarchive', threadId });
     return result;
@@ -247,8 +256,27 @@ class CodexAppServer {
     const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
     this.activeTurnByThread.delete(String(threadId));
     this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
+    this.rememberEvent('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
     this.broadcast('codex-notification', { method: 'turn/interrupted', params: { threadId, turnId } });
     return { ...result, threadId, turnId };
+  }
+
+  rememberEvent(method, params = {}) {
+    if (!shouldStoreEvent(method)) return;
+    const thread = params.thread;
+    const threadId = params.threadId ?? params.id ?? thread?.id;
+    if (!threadId) return;
+    const turnId = params.turnId ?? params.turn?.id;
+    const event = {
+      at: Date.now(),
+      method: String(method ?? ''),
+      turnId: turnId ? String(turnId) : null,
+      status: params.status?.type ?? params.status ?? thread?.status?.type ?? null,
+      message: eventMessage(method, params),
+    };
+    const key = String(threadId);
+    const current = this.eventsByThread.get(key) ?? [];
+    this.eventsByThread.set(key, [...current, event].slice(-80));
   }
 
   addQueuedMessage(threadId, turnId, input) {
@@ -469,6 +497,36 @@ function compactTurn(turn, steeredMessages = []) {
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
     items: (turn.items ?? []).map(compactItem),
   };
+}
+
+
+function shouldStoreEvent(method) {
+  const lower = String(method ?? '').toLowerCase();
+  if (!lower) return false;
+  if (lower.includes('/delta')) return false;
+  if (lower.includes('tokenusage')) return false;
+  if (lower.includes('agentmessage')) return false;
+  if (lower.startsWith('item/')) return false;
+  return true;
+}
+
+function eventMessage(method, params = {}) {
+  const lower = String(method ?? '').toLowerCase();
+  const status = params.status?.type ?? params.thread?.status?.type ?? params.status;
+  const name = String(params.name ?? '').trim();
+  if (lower.includes('thread/name/set')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name cleared';
+  if (lower.includes('thread/name')) return 'Name updated';
+  if (lower.includes('thread/archive')) return 'Archived session';
+  if (lower.includes('thread/unarchive')) return 'Restored session';
+  if (lower.includes('thread/start')) return 'Opened session';
+  if (lower.includes('turn/queued')) return 'Queued follow-up prompt';
+  if (lower.includes('turn/steer') || lower.includes('steered')) return 'Steered active turn';
+  if (lower.includes('interrupt') || lower.includes('interrupted')) return 'Stopped active turn';
+  if (lower.includes('turn/start') || lower.includes('turn/started')) return 'Started turn';
+  if (lower.includes('turn/complet')) return 'Completed turn';
+  if (lower.includes('turn/error') || lower.includes('failed')) return 'Turn error';
+  if (status) return `Status: ${String(status)}`;
+  return String(method ?? 'Event');
 }
 
 function textFromContent(content) {
