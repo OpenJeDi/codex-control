@@ -258,7 +258,30 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .prompt-bar textarea, .modal textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid var(--line); border-radius: 12px; background: #141619; color: var(--text); padding: 10px; font: inherit; }
 .prompt-bar { border-top: 1px solid var(--line); padding: 10px; background: color-mix(in srgb, var(--panel) 96%, black); }
 .prompt-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
-.prompt-actions input[type="file"] { flex: 1; width: auto; padding: 7px 9px; color: var(--muted); }
+.attach-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+.attach-button:hover { border-color: var(--accent-2); background: var(--panel-3); }
+.attach-button input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.attach-button span { transform: translateY(-1px); pointer-events: none; }
 .prompt-actions button:disabled { opacity: 0.6; cursor: wait; }
 
 .modal {

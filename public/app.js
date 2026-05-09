@@ -343,7 +343,10 @@ function renderDetail({ thread, turns }) {
     <form class="prompt-bar" id="promptForm">
       <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
       <div class="prompt-actions">
-        <input name="files" type="file" multiple>
+        <label class="attach-button" title="Attach files">
+          <input name="files" type="file" multiple>
+          <span>+</span>
+        </label>
         <button type="submit">Send</button>
       </div>
     </form>
