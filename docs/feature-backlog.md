@@ -41,3 +41,11 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Support obvious archive/unarchive actions in the session list/detail UI.
 - Archived sessions should stay hidden from normal results unless archive search/filter is explicitly enabled.
 - Make destructive-ish actions reversible where possible and confirm only when the consequence is not obvious.
+
+## Rollback checkpoints
+
+- Support rollback as a useful session action, but make the limitation explicit: Codex thread rollback may not automatically revert file changes already made in the worktree.
+- Add subtle rollback buttons between turns/sections so the user can roll the conversation back to that point.
+- Before rollback, show a warning and current worktree dirty state/diff summary when possible.
+- Longer term, pair session rollback with optional git/file rollback helpers so model-made changes can be reverted deliberately.
+- Do not prioritize forking; it does not fit the intended JeDi/Brain workflow unless a clear use case appears later.
