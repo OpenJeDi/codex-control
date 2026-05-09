@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   --bg: #0c1017;
   --panel: #121824;
@@ -65,6 +65,7 @@ button:hover { border-color: var(--accent-2); }
   min-width: 0;
 }
 .sidebar-rail {
+  grid-column: 1;
   display: none;
   align-items: start;
   justify-content: center;
@@ -74,6 +75,7 @@ button:hover { border-color: var(--accent-2); }
 }
 .sidebar-rail button { padding: 7px 9px; }
 .sidebar-content {
+  grid-column: 2;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -252,3 +254,4 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 
 .repo-row { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 520px) { .search-row { grid-template-columns: 1fr; } }
+
