@@ -35,7 +35,6 @@ const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Upd
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-const liveStatusTypes = new Set(['externalactive', 'running', 'inprogress', 'waitingonapproval', 'waitingonuserinput']);
 
 function ageLabel(seconds) {
   const timestamp = Number(seconds) * 1000;
@@ -70,18 +69,31 @@ function statusLabel(thread) {
   }[raw.toLowerCase()] ?? normalized);
 }
 
-function isLiveThread(thread) {
-  return liveStatusTypes.has(statusClass(thread));
-}
-
 function isNearBottom(el, threshold = 120) {
   if (!el) return false;
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
 }
 
-function scrollDetailToBottom() {
+function scrollDetailToBottom({ smooth = false } = {}) {
   const scroller = detailEl.querySelector('.detail-shell .detail');
-  if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  if (!scroller) return;
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  updateJumpBottomButton(scroller);
+}
+
+function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell .detail')) {
+  const button = detailEl.querySelector('.jump-bottom');
+  if (!button || !scroller) return;
+  button.hidden = isNearBottom(scroller) || scroller.scrollHeight <= scroller.clientHeight + 1;
+}
+
+function bindDetailScrollControls() {
+  const scroller = detailEl.querySelector('.detail-shell .detail');
+  const button = detailEl.querySelector('.jump-bottom');
+  if (!scroller || !button) return;
+  scroller.addEventListener('scroll', () => updateJumpBottomButton(scroller), { passive: true });
+  button.addEventListener('click', () => scrollDetailToBottom({ smooth: true }));
+  updateJumpBottomButton(scroller);
 }
 
 function displayRepo(originUrl) {
@@ -348,6 +360,7 @@ function refreshAgeIndicators() {
 async function loadDetail(id, { quiet = false } = {}) {
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
+  const previousScrollTop = previousScroller?.scrollTop ?? 0;
   const shouldContinueFollowing = quiet && id === previousId && isNearBottom(previousScroller);
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
@@ -360,7 +373,13 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
-    if (isLiveThread(data.thread) && (!quiet || shouldContinueFollowing)) requestAnimationFrame(scrollDetailToBottom);
+    bindDetailScrollControls();
+    requestAnimationFrame(() => {
+      const scroller = detailEl.querySelector('.detail-shell .detail');
+      if (!quiet || shouldContinueFollowing) scrollDetailToBottom();
+      else if (quiet && scroller) scroller.scrollTop = previousScrollTop;
+      updateJumpBottomButton(scroller);
+    });
   } catch (error) {
     detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
@@ -391,6 +410,7 @@ function renderDetail({ thread, turns }) {
       </div>
       ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
     </div>
+    <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
     <form class="prompt-bar" id="promptForm">
       <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
       <div class="prompt-actions">
