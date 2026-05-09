@@ -7,55 +7,61 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>Codex Control</h1>
-      <p id="status">Connecting to Codex...</p>
-    </div>
-    <button id="refresh" type="button">Refresh</button>
-  </header>
+  <main class="layout" id="layout">
+    <section class="panel list-panel" id="sidebar">
+      <div class="sidebar-rail">
+        <button id="expandSidebar" type="button" title="Show sessions">☰</button>
+      </div>
 
-  <main class="layout">
-    <section class="panel list-panel">
-      <form id="filters" class="filters">
-        <div class="repo-row">
-          <select name="repo" id="repoFilter" title="Git repository">
-            <option value="">all repos</option>
-          </select>
-          <button id="addRepo" type="button" title="Add repository filter">Add repo</button>
+      <div class="sidebar-content">
+        <div class="sidebar-actions">
+          <strong>Sessions</strong>
+          <button id="collapseSidebar" type="button" title="Hide sessions">←</button>
         </div>
 
-        <div class="search-row">
-          <input name="q" id="searchInput" placeholder="search sessions">
-          <button id="filterToggle" type="button" aria-expanded="false" aria-controls="filterDrawer">Filters</button>
-        </div>
-
-        <div id="filterDrawer" class="filter-drawer" hidden>
-          <div class="drawer-head">
-            <strong>Filters</strong>
-            <button id="filterClose" type="button">Close</button>
-          </div>
-          <div class="drawer-grid">
-            <input name="branch" placeholder="branch contains">
-            <select name="source" title="Source">
-              <option value="">all sources</option>
-              <option value="vscode">vscode</option>
-              <option value="cli">cli</option>
+        <form id="filters" class="filters">
+          <div class="repo-row">
+            <select name="repo" id="repoFilter" title="Git repository">
+              <option value="">all repos</option>
             </select>
-            <label class="check"><input type="checkbox" name="groupBranch"> group by branch</label>
-            <label class="check"><input type="checkbox" name="archived"> search archive</label>
+            <button id="addRepo" type="button" title="Add repository filter">Add repo</button>
           </div>
-        </div>
-      </form>
-      <div id="repoWorktrees" class="repo-worktrees" hidden></div>
-      <div id="sessionList" class="session-list"></div>
+
+          <div class="search-row">
+            <input name="q" id="searchInput" placeholder="search sessions">
+            <button id="filterToggle" type="button" aria-expanded="false" aria-controls="filterDrawer">Filters</button>
+          </div>
+
+          <div id="filterDrawer" class="filter-drawer" hidden>
+            <div class="drawer-head">
+              <strong>Filters</strong>
+              <button id="filterClose" type="button">Close</button>
+            </div>
+            <div class="drawer-grid">
+              <input name="branch" placeholder="branch contains">
+              <select name="source" title="Source">
+                <option value="">all sources</option>
+                <option value="vscode">vscode</option>
+                <option value="cli">cli</option>
+              </select>
+              <label class="check"><input type="checkbox" name="groupBranch"> group by branch</label>
+              <label class="check"><input type="checkbox" name="archived"> search archive</label>
+            </div>
+          </div>
+        </form>
+        <div id="repoWorktrees" class="repo-worktrees" hidden></div>
+        <div id="sessionList" class="session-list"></div>
+      </div>
     </section>
+
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" title="Drag to resize sessions pane"></div>
 
     <section class="panel detail-panel">
       <div id="detail" class="empty">Pick a session.</div>
     </section>
   </main>
 
+  <p id="status" class="sr-only" aria-live="polite">Connecting to Codex...</p>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

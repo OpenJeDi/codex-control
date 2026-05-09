@@ -8,13 +8,19 @@ const addRepo = document.querySelector('#addRepo');
 const filterToggle = document.querySelector('#filterToggle');
 const filterClose = document.querySelector('#filterClose');
 const filterDrawer = document.querySelector('#filterDrawer');
-const refresh = document.querySelector('#refresh');
+const layout = document.querySelector('#layout');
+const splitter = document.querySelector('#splitter');
+const collapseSidebar = document.querySelector('#collapseSidebar');
+const expandSidebar = document.querySelector('#expandSidebar');
 let activeId = null;
 let debounceTimer = null;
 let repoInitialized = false;
+let isDraggingSidebar = false;
 
 const CRASH_PARTY_REPO = 'git@github.com:OutOfTheBoxProductions/crash-party-prototype.git';
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
+const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
+const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
@@ -258,12 +264,47 @@ function setDrawerOpen(open) {
   filterToggle.classList.toggle('active', open);
 }
 
+function applySavedLayout() {
+  const savedWidth = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+  if (savedWidth) document.documentElement.style.setProperty('--sidebar-width', savedWidth);
+  setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
+}
+
+function setSidebarCollapsed(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+}
+
+function resizeSidebar(clientX) {
+  const min = 280;
+  const max = Math.max(min, window.innerWidth - 420);
+  const width = Math.min(max, Math.max(min, clientX));
+  const value = `${width}px`;
+  document.documentElement.style.setProperty('--sidebar-width', value);
+  localStorage.setItem(SIDEBAR_WIDTH_KEY, value);
+}
+
 filters.addEventListener('input', scheduleLoadSessions);
 filters.addEventListener('change', scheduleLoadSessions);
 filters.addEventListener('submit', (event) => event.preventDefault());
-refresh.addEventListener('click', () => { loadHealth(); loadSessions(); });
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
+collapseSidebar.addEventListener('click', () => setSidebarCollapsed(true));
+expandSidebar.addEventListener('click', () => setSidebarCollapsed(false));
+splitter.addEventListener('pointerdown', (event) => {
+  if (document.body.classList.contains('sidebar-collapsed')) return;
+  isDraggingSidebar = true;
+  splitter.setPointerCapture(event.pointerId);
+  document.body.classList.add('resizing-sidebar');
+});
+splitter.addEventListener('pointermove', (event) => {
+  if (!isDraggingSidebar) return;
+  resizeSidebar(event.clientX);
+});
+splitter.addEventListener('pointerup', () => {
+  isDraggingSidebar = false;
+  document.body.classList.remove('resizing-sidebar');
+});
 addRepo.addEventListener('click', () => {
   const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
   if (!value) return;
@@ -274,5 +315,6 @@ addRepo.addEventListener('click', () => {
   loadSessions();
 });
 
+applySavedLayout();
 await loadHealth();
 await loadSessions();
