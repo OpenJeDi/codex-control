@@ -330,11 +330,13 @@ function refreshAgeIndicators() {
   }
 }
 
-async function loadDetail(id) {
+async function loadDetail(id, { quiet = false } = {}) {
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
-  detailEl.className = 'empty';
-  detailEl.innerHTML = '<div class="empty">Loading thread...</div>';
+  if (!quiet) {
+    detailEl.className = 'empty';
+    detailEl.innerHTML = '<div class="empty">Loading thread...</div>';
+  }
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     detailEl.className = 'detail-host';
@@ -465,7 +467,7 @@ function scheduleLoadSessions() {
 function scheduleDetailRefresh(id = activeId, delay = 500) {
   if (!id) return;
   clearTimeout(detailRefreshTimer);
-  detailRefreshTimer = setTimeout(() => loadDetail(id), delay);
+  detailRefreshTimer = setTimeout(() => loadDetail(id, { quiet: true }), delay);
 }
 
 function connectEvents() {
