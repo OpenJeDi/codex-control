@@ -282,7 +282,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 
 .detail-panel { display: grid; overflow: hidden; min-height: 0; }
 .detail-host { min-height: 0; height: 100%; display: grid; overflow: hidden; }
-.detail-shell { min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.detail-shell { min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; }
 .detail-shell .detail { grid-row: 1; grid-column: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; overscroll-behavior: contain; }
 .jump-bottom {
   grid-row: 1;
@@ -309,9 +309,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .status.running, .status.inprogress, .status.externalactive { border-color: rgba(143, 188, 143, 0.6); color: var(--accent); }
 .status.waitingonapproval, .status.waitingonuserinput { border-color: rgba(216, 181, 109, 0.65); color: var(--warn); }
 .status.error, .status.failed { border-color: rgba(212, 135, 135, 0.65); color: var(--danger); }
+.queued-messages { grid-row: 2; grid-column: 1; border-top: 1px solid rgba(255, 184, 108, 0.25); padding: 10px 14px; background: rgba(255, 184, 108, 0.06); }
+.queued-title { color: #ffbd7a; font-size: 12px; font-weight: 750; margin-bottom: 8px; }
+.queued-message { border: 1px dashed rgba(255, 184, 108, 0.35); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+.queued-message:first-of-type { margin-top: 0; }
+.queued-meta { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
 .prompt-bar { display: grid; gap: 8px; }
 .prompt-bar textarea, .modal textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid var(--line); border-radius: 12px; background: #141619; color: var(--text); padding: 10px; font: inherit; }
-.prompt-bar { grid-row: 2; grid-column: 1; border-top: 1px solid var(--line); padding: 10px; background: color-mix(in srgb, var(--panel) 96%, black); }
+.prompt-bar { grid-row: 3; grid-column: 1; border-top: 1px solid var(--line); padding: 10px; background: color-mix(in srgb, var(--panel) 96%, black); }
 .prompt-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .attach-button {
   position: relative;

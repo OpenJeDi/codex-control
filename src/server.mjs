@@ -21,6 +21,7 @@ class CodexAppServer {
     this.pending = new Map();
     this.statusByThread = new Map();
     this.activeTurnByThread = new Map();
+    this.queuedMessagesByThread = new Map();
     this.steeredMessagesByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
@@ -103,7 +104,10 @@ class CodexAppServer {
     if (!threadId) return;
 
     const turnId = params.turnId ?? params.turn?.id;
-    if (turnId && (lower.includes('turnstarted') || lower.includes('turn/started'))) this.activeTurnByThread.set(String(threadId), String(turnId));
+    if (turnId && (lower.includes('turnstarted') || lower.includes('turn/started'))) {
+      this.removeQueuedMessage(threadId, turnId);
+      this.activeTurnByThread.set(String(threadId), String(turnId));
+    }
     if (lower.includes('turncompleted') || lower.includes('turn/completed') || lower.includes('interrupt')) this.activeTurnByThread.delete(String(threadId));
 
     let status = params.status ?? thread?.status;
@@ -156,9 +160,13 @@ class CodexAppServer {
     } catch (error) {
       if (!isTurnsNotReadyError(error)) throw error;
     }
+    const key = String(threadId);
+    const turnData = turns.data ?? [];
+    this.pruneQueuedMessages(key, new Set(turnData.map((turn) => String(turn.id))));
     return {
       thread: await this.decorateThread(read.thread),
-      turns: (turns.data ?? []).map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(String(threadId)) ?? [])),
+      turns: turnData.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
+      queuedMessages: this.queuedMessagesByThread.get(key) ?? [],
     };
   }
 
@@ -171,8 +179,22 @@ class CodexAppServer {
 
   async startTurn(threadId, input) {
     await this.ready;
+    let activeBefore = null;
+    try {
+      activeBefore = await this.activeTurnId(threadId);
+    } catch (error) {
+      if (!isTurnsNotReadyError(error)) throw error;
+    }
+
     const result = await this.request('turn/start', { threadId, input }, 30000);
     const turnId = result.turn?.id;
+    if (activeBefore && turnId && String(activeBefore) !== String(turnId)) {
+      this.addQueuedMessage(threadId, turnId, input);
+      this.statusByThread.set(String(threadId), { type: 'running' });
+      this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId } });
+      return result;
+    }
+
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
@@ -203,6 +225,29 @@ class CodexAppServer {
     this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
     this.broadcast('codex-notification', { method: 'turn/interrupted', params: { threadId, turnId } });
     return { ...result, threadId, turnId };
+  }
+
+  addQueuedMessage(threadId, turnId, input) {
+    const text = textFromContent(input);
+    const key = String(threadId);
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    this.queuedMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+  }
+
+  removeQueuedMessage(threadId, turnId) {
+    const key = String(threadId);
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const next = current.filter((message) => String(message.turnId) !== String(turnId));
+    if (next.length) this.queuedMessagesByThread.set(key, next);
+    else this.queuedMessagesByThread.delete(key);
+  }
+
+  pruneQueuedMessages(threadId, seenTurnIds) {
+    const key = String(threadId);
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const next = current.filter((message) => !seenTurnIds.has(String(message.turnId)));
+    if (next.length) this.queuedMessagesByThread.set(key, next);
+    else this.queuedMessagesByThread.delete(key);
   }
 
   async activeTurnId(threadId) {

@@ -28,14 +28,12 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 
 ## Prompt queue, steering, and interruption UX
 
-Status: not implemented yet unless noted in `docs/implementation-status.md`.
+Status: core behavior implemented in the session-interaction branch; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
 
-- Match the Codex app / VS Code steering model: when a turn is active, normal send queues the message for after the agent finishes.
-- Show queued messages above the prompt bar so the user can see what will be sent next.
-- Provide an explicit Steer button/action that sends the draft immediately as a `turn/steer` prompt against the active turn.
-- Annotate steered messages in the transcript so they are visually distinct from normal user prompts.
-- Provide a clear Stop button for interrupting the active turn via `turn/interrupt` or the verified Codex app-server equivalent.
-- Add a stopped/interrupted-session break line in the transcript at the point where the run was stopped, so the transcript does not look like a normal completion.
+- Implemented: when a turn is active, normal Send queues the message for after the agent finishes and shows the queued message above the prompt bar.
+- Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
+- Implemented: clear Stop action interrupts the active turn with verified `turn/interrupt` params and renders a stopped break line.
+- Follow-up polish: persist queued-message annotations across app restarts if this proves necessary.
 - Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
 - Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
 

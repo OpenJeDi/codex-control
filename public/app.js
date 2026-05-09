@@ -397,7 +397,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
 }
 
-function renderDetail({ thread, turns }) {
+function renderDetail({ thread, turns, queuedMessages = [] }) {
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
   return `<div class="detail-shell">
@@ -426,6 +426,7 @@ function renderDetail({ thread, turns }) {
       ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
+    ${renderQueuedMessages(queuedMessages)}
     <form class="prompt-bar" id="promptForm">
       <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
       <div class="prompt-actions">
@@ -444,6 +445,17 @@ function renderBusyIndicator(thread) {
   return `<div class="busy-indicator" role="status" aria-live="polite">
     <span class="busy-label">Agent working</span>
     <span class="busy-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+  </div>`;
+}
+
+function renderQueuedMessages(messages = []) {
+  if (!messages.length) return '';
+  return `<div class="queued-messages" aria-live="polite">
+    <div class="queued-title">Queued for after current run</div>
+    ${messages.map((message) => `<div class="queued-message">
+      <div class="queued-meta">Turn ${escapeHtml(message.turnId || '')}</div>
+      ${renderMarkdownText(message.text || '(attachment-only prompt)')}
+    </div>`).join('')}
   </div>`;
 }
 
@@ -500,6 +512,7 @@ async function submitPrompt(event, id) {
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
   const formData = new FormData(form);
+  const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
   submit.textContent = 'Sending...';
   try {
@@ -515,7 +528,7 @@ async function submitPrompt(event, id) {
     window.alert(error.message);
   } finally {
     submit.disabled = false;
-    submit.textContent = 'Send';
+    submit.textContent = wasQueuedSend ? 'Send after current' : 'Send';
   }
 }
 
