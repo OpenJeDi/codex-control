@@ -382,6 +382,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
     detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
+    detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -405,7 +406,10 @@ function renderDetail({ thread, turns }) {
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
         </div>
-        <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+        <div class="detail-actions">
+          <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+          ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
+        </div>
       </div>
       <div class="kv">
         <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
@@ -442,6 +446,25 @@ function renderBusyIndicator(thread) {
   </div>`;
 }
 
+async function interruptTurn(id) {
+  const button = detailEl.querySelector('[data-action=interrupt-turn]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Stopping...';
+  }
+  try {
+    await jsonApi(`/api/threads/${encodeURIComponent(id)}/interrupt`, {});
+    scheduleDetailRefresh(id, 250);
+    scheduleLoadSessions();
+  } catch (error) {
+    window.alert(error.message);
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Stop';
+    }
+  }
+}
+
 async function submitPrompt(event, id) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -467,10 +490,19 @@ async function submitPrompt(event, id) {
 }
 
 function renderTurn(turn, index) {
-  return `<section class="turn">
-    <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span></div>
+  const status = String(turn.status ?? '').toLowerCase();
+  return `<section class="turn ${escapeHtml(status)}">
+    <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
     ${turn.items.map(renderItem).join('')}
+    ${renderTurnBreak(turn)}
   </section>`;
+}
+
+function renderTurnBreak(turn) {
+  const status = String(turn.status ?? '').toLowerCase();
+  if (status === 'interrupted') return '<div class="turn-break interrupted">Run stopped</div>';
+  if (status === 'failed' || status === 'error') return '<div class="turn-break error">Run failed</div>';
+  return '';
 }
 
 function itemLabel(item) {

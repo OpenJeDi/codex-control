@@ -20,6 +20,7 @@ class CodexAppServer {
     this.nextId = 1;
     this.pending = new Map();
     this.statusByThread = new Map();
+    this.activeTurnByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
     this.threadsChangedTimer = null;
@@ -100,9 +101,14 @@ class CodexAppServer {
     const threadId = params.threadId ?? params.id ?? thread?.id;
     if (!threadId) return;
 
+    const turnId = params.turnId ?? params.turn?.id;
+    if (turnId && (lower.includes('turnstarted') || lower.includes('turn/started'))) this.activeTurnByThread.set(String(threadId), String(turnId));
+    if (lower.includes('turncompleted') || lower.includes('turn/completed') || lower.includes('interrupt')) this.activeTurnByThread.delete(String(threadId));
+
     let status = params.status ?? thread?.status;
     if (!status && (lower.includes('turnstarted') || lower.includes('turn/started'))) status = { type: 'running' };
     if (!status && (lower.includes('turncompleted') || lower.includes('turn/completed'))) status = { type: 'idle' };
+    if (!status && lower.includes('interrupt')) status = { type: 'idle' };
     if (!status && lower.includes('error')) status = { type: 'error' };
     if (!status) return;
 
@@ -165,9 +171,34 @@ class CodexAppServer {
   async startTurn(threadId, input) {
     await this.ready;
     const result = await this.request('turn/start', { threadId, input }, 30000);
-    this.rememberStatus('turn/started', { threadId, status: { type: 'running' } });
-    this.broadcast('codex-notification', { method: 'turn/started', params: { threadId } });
+    const turnId = result.turn?.id;
+    if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
+    this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
+    this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
     return result;
+  }
+
+  async interruptTurn(threadId) {
+    await this.ready;
+    const turnId = await this.activeTurnId(threadId);
+    if (!turnId) throw new Error('No active turn found for this thread.');
+    const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
+    this.activeTurnByThread.delete(String(threadId));
+    this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
+    this.broadcast('codex-notification', { method: 'turn/interrupted', params: { threadId, turnId } });
+    return { ...result, threadId, turnId };
+  }
+
+  async activeTurnId(threadId) {
+    const remembered = this.activeTurnByThread.get(String(threadId));
+    if (remembered) return remembered;
+    const turns = await this.request('thread/turns/list', { threadId }, 15000);
+    const active = (turns.data ?? []).find((turn) => isActiveTurnStatus(turn.status));
+    if (active?.id) {
+      this.activeTurnByThread.set(String(threadId), String(active.id));
+      return String(active.id);
+    }
+    return null;
   }
 
   addEventClient(res) {
@@ -223,6 +254,11 @@ function normalizeStatus(status) {
 function isTurnsNotReadyError(error) {
   const message = String(error?.message ?? error ?? '').toLowerCase();
   return message.includes('not materialized yet') || message.includes('turns/list is unavailable before first user message');
+}
+
+function isActiveTurnStatus(status) {
+  const text = String(status ?? '').toLowerCase();
+  return text === 'inprogress' || text === 'in_progress' || text === 'running';
 }
 
 const terminalRolloutEvents = new Set([
@@ -340,6 +376,11 @@ function parseWorktreeList(output) {
 function compactTurn(turn) {
   return {
     id: turn.id,
+    status: turn.status,
+    error: turn.error,
+    startedAt: turn.startedAt,
+    completedAt: turn.completedAt,
+    durationMs: turn.durationMs,
     items: (turn.items ?? []).map(compactItem),
   };
 }
@@ -755,6 +796,12 @@ const server = createServer(async (req, res) => {
       const data = await codex.readThread(threadId);
       const input = await buildTurnInput(threadId, data.thread, req);
       sendJson(res, 200, await codex.startTurn(threadId, input));
+      return;
+    }
+
+    const interruptMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/interrupt$/);
+    if (interruptMatch && req.method === 'POST') {
+      sendJson(res, 200, await codex.interruptTurn(decodeURIComponent(interruptMatch[1])));
       return;
     }
 

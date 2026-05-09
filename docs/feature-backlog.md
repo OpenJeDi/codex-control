@@ -10,7 +10,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Account and rate-limit visibility.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
-- Thread controls: fork, rollback, compact, archive, rename, interrupt.
+- Thread controls: fork, rollback, compact, archive, rename. Interrupt/Stop is implemented for active turns.
 - Richer live streaming / follow view.
 
 ## Live observability / status chrome
