@@ -25,3 +25,12 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Show the model used by the active session permanently in the session UI, probably as a compact label inside or near the prompt bar.
 - Make that same model label interactive: clicking it opens a dropdown to switch the model for the current session.
 - The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
+
+## Prompt queue, steering, and interruption UX
+
+- Match the Codex app / VS Code steering model: when a turn is active, normal send queues the message for after the agent finishes.
+- Show queued messages above the prompt bar so the user can see what will be sent next.
+- Provide an explicit Steer button/action that sends the draft immediately as a `turn/steer` prompt against the active turn.
+- Provide a clear Stop button for interrupting the active turn via `turn/interrupt`.
+- Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
+- Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
