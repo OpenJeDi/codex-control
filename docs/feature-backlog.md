@@ -19,3 +19,9 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Add a dedicated Live Events tab for following Codex app-server events as they happen.
 - Use subtle colors and icons to distinguish event types clearly, for example status changes, turn start/finish, agent text deltas, command output, file changes, approvals, warnings, and errors.
 - Keep the event stream useful for diagnosis without turning the main session transcript into noisy plumbing.
+
+## Session model controls
+
+- Show the model used by the active session permanently in the session UI, probably as a compact label inside or near the prompt bar.
+- Make that same model label interactive: clicking it opens a dropdown to switch the model for the current session.
+- The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
