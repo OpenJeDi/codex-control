@@ -170,7 +170,7 @@ body.sidebar-collapsed .splitter { display: none; }
   gap: 8px;
 }
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
-.session-list, .detail-panel { overflow: auto; }
+.session-list { overflow: auto; }
 .session-group { border-bottom: 1px solid var(--line); }
 .group-title {
   position: sticky;
@@ -246,9 +246,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 @media (max-width: 520px) { .search-row { grid-template-columns: 1fr; } }
 
 
-.detail-panel { display: grid; overflow: hidden; }
+.detail-panel { display: grid; overflow: hidden; min-height: 0; }
 .detail-shell { min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
-.detail-shell .detail { overflow: auto; min-height: 0; }
+.detail-shell .detail { overflow-y: auto; overflow-x: hidden; min-height: 0; overscroll-behavior: contain; }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
 .status { text-transform: lowercase; }
 .status.running, .status.inprogress { border-color: rgba(143, 188, 143, 0.6); color: var(--accent); }
