@@ -62,3 +62,9 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Move away from the current blue-accent theme toward a calmer grey/dark-neutral interface, closer to Cinny's feel.
 - Use color sparingly for semantic state only: success, warning, error, active/running, approval-needed.
 - Keep the UI dense, quiet, and readable rather than dashboard-bright.
+
+## Transcript rendering polish
+
+- Add a good safe Markdown renderer for normal user/agent text.
+- Keep commands, file changes, raw JSON, and large/noisy payloads collapsible in monospace.
+- Preserve inspectability while making normal Codex replies pleasant to read.
