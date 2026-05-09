@@ -280,20 +280,24 @@ function renderSession(session) {
   const repo = displayRepo(session.gitInfo?.originUrl);
   const status = statusLabel(session);
   const statusCss = statusClass(session);
+  const info = [
+    ['Source', source],
+    ['Repo', repo],
+    ['Branch', branch],
+    ['Updated', fmtTime(session.updatedAt)],
+    ['CWD', cwd],
+    ['ID', session.id],
+  ].map(([label, value]) => `${label}: ${value || '-'}`).join('\n');
   return `
-    <button class="session${active}" data-id="${escapeHtml(session.id)}">
+    <button class="session${active}" data-id="${escapeHtml(session.id)}" title="${escapeHtml(info)}">
       <div class="session-title">
         <span>${escapeHtml(session.name || '(unnamed)')}</span>
-        <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+        <span class="session-flags">
+          <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
+          <span class="info-dot" aria-label="Session info">i</span>
+        </span>
       </div>
       <div class="session-preview">${escapeHtml(session.preview || '')}</div>
-      <div class="meta">
-        <span class="badge">${escapeHtml(source)}</span>
-        <span class="badge">${escapeHtml(repo)}</span>
-        <span class="badge">${escapeHtml(branch)}</span>
-        <span class="badge">${escapeHtml(fmtTime(session.updatedAt))}</span>
-        <span class="badge">${escapeHtml(cwd)}</span>
-      </div>
     </button>`;
 }
 
