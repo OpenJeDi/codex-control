@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -114,6 +114,59 @@ class CodexAppServer {
 }
 
 const codex = new CodexAppServer();
+
+function execFileText(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { windowsHide: true, maxBuffer: 1024 * 1024 * 10, ...options }, (error, stdout, stderr) => {
+      if (error) {
+        error.stderr = stderr;
+        error.stdout = stdout;
+        reject(error);
+        return;
+      }
+      resolve(String(stdout ?? ''));
+    });
+  });
+}
+
+async function worktreesForRepo(repoUrl) {
+  const repo = String(repoUrl ?? '').trim();
+  if (!repo) return { repo, worktrees: [], source: 'none' };
+
+  const threads = await codex.listThreads({ includeArchived: true });
+  const candidates = threads
+    .filter((thread) => includes(`${thread.gitInfo?.originUrl ?? ''}\n${thread.cwd ?? ''}\n${thread.path ?? ''}`, repo))
+    .map((thread) => thread.cwd)
+    .filter(Boolean);
+
+  const seen = new Set();
+  for (const cwd of candidates) {
+    if (seen.has(cwd)) continue;
+    seen.add(cwd);
+    try {
+      const output = await execFileText('git', ['-C', cwd, 'worktree', 'list', '--porcelain']);
+      return { repo, source: cwd, worktrees: parseWorktreeList(output) };
+    } catch {
+      // Try the next known cwd.
+    }
+  }
+
+  return { repo, worktrees: [], source: 'not-found' };
+}
+
+function parseWorktreeList(output) {
+  const blocks = String(output).split(/\r?\n\r?\n/).map((block) => block.trim()).filter(Boolean);
+  return blocks.map((block) => {
+    const item = { path: '', bare: false, head: '', branch: '' };
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) item.path = line.slice('worktree '.length);
+      else if (line === 'bare') item.bare = true;
+      else if (line.startsWith('HEAD ')) item.head = line.slice('HEAD '.length);
+      else if (line.startsWith('branch ')) item.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '');
+    }
+    return item;
+  });
+}
 
 function compactTurn(turn) {
   return {
@@ -261,6 +314,12 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/health') {
       const info = await codex.ready;
       sendJson(res, 200, { ok: true, ...info });
+      return;
+    }
+
+
+    if (url.pathname === '/api/repo-worktrees') {
+      sendJson(res, 200, await worktreesForRepo(url.searchParams.get('repo')));
       return;
     }
 

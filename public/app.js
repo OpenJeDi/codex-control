@@ -3,6 +3,7 @@ const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
 const repoFilter = document.querySelector('#repoFilter');
+const repoWorktrees = document.querySelector('#repoWorktrees');
 const addRepo = document.querySelector('#addRepo');
 const filterToggle = document.querySelector('#filterToggle');
 const filterClose = document.querySelector('#filterClose');
@@ -85,6 +86,8 @@ async function loadSessions() {
       }
     }
 
+    await loadRepoWorktrees();
+
     if (!data.length) {
       const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';
       listEl.innerHTML = `<div class="empty">No sessions match.${archiveHint}</div>`;
@@ -97,6 +100,41 @@ async function loadSessions() {
     }
   } catch (error) {
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+
+async function loadRepoWorktrees() {
+  const repo = repoFilter.value.trim();
+  if (!repo) {
+    repoWorktrees.hidden = true;
+    repoWorktrees.innerHTML = '';
+    return;
+  }
+
+  try {
+    const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
+    const worktrees = data.worktrees ?? [];
+    if (!worktrees.length) {
+      repoWorktrees.hidden = false;
+      repoWorktrees.innerHTML = '<div class="repo-worktrees-title">No local worktrees found from known Codex sessions.</div>';
+      return;
+    }
+
+    const normalWorktrees = worktrees.filter((item) => !item.bare);
+    repoWorktrees.hidden = false;
+    repoWorktrees.innerHTML = `
+      <div class="repo-worktrees-title">Worktrees <span>${normalWorktrees.length}</span></div>
+      <div class="worktree-chips">
+        ${normalWorktrees.map((item) => `
+          <button type="button" class="worktree-chip" title="${escapeHtml(item.path)}">
+            <strong>${escapeHtml(item.branch || 'detached')}</strong>
+            <span>${escapeHtml(compactPath(item.path))}</span>
+          </button>`).join('')}
+      </div>`;
+  } catch (error) {
+    repoWorktrees.hidden = false;
+    repoWorktrees.innerHTML = `<div class="error">Worktrees unavailable: ${escapeHtml(error.message)}</div>`;
   }
 }
 

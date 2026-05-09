@@ -92,6 +92,39 @@ button:hover { border-color: var(--accent-2); }
   gap: 8px;
 }
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
+.repo-worktrees {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.02);
+}
+.repo-worktrees-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.worktree-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.worktree-chip {
+  display: grid;
+  gap: 2px;
+  max-width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.worktree-chip span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
 .session-list, .detail-panel { overflow: auto; }
 .session-group { border-bottom: 1px solid var(--line); }
 .group-title {
