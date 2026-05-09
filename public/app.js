@@ -1,4 +1,4 @@
-const statusEl = document.querySelector('#status');
+﻿const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
@@ -233,7 +233,7 @@ function renderDetail({ thread, turns }) {
       <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
       <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
     </div>
-    ${turns.map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
+    ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
   </div>`;
 }
 
@@ -357,3 +357,4 @@ splitter.addEventListener('pointerup', () => {
 applySavedLayout();
 await loadHealth();
 await loadSessions();
+
