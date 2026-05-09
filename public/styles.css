@@ -9,7 +9,7 @@
   --accent: #68d391;
   --accent-2: #60a5fa;
   --danger: #fb7185;
-  --sidebar-width: 420px;
+  --sidebar-width: 430px;
 }
 * { box-sizing: border-box; }
 body {
@@ -82,13 +82,14 @@ button:hover { border-color: var(--accent-2); }
 .sidebar-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: start;
+  gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
 }
 .sidebar-actions button { padding: 5px 8px; }
+.sidebar-actions strong { line-height: 1; }
 .splitter {
   cursor: col-resize;
   touch-action: none;
@@ -164,8 +165,8 @@ body.sidebar-collapsed .splitter { display: none; }
 }
 .repo-worktrees-title {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: start;
+  gap: 8px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -248,3 +249,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   .splitter { display: none; }
   .list-panel { grid-template-columns: 0 minmax(0, 1fr); }
 }
+
+.repo-row { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 520px) { .search-row { grid-template-columns: 1fr; } }

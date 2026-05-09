@@ -15,16 +15,16 @@
 
       <div class="sidebar-content">
         <div class="sidebar-actions">
-          <strong>Sessions</strong>
           <button id="collapseSidebar" type="button" title="Hide sessions">◀</button>
+          <strong>Sessions</strong>
         </div>
 
         <form id="filters" class="filters">
           <div class="repo-row">
             <select name="repo" id="repoFilter" title="Git repository">
               <option value="">all repos</option>
+              <option value="__add_repo__">+ Add repo...</option>
             </select>
-            <button id="addRepo" type="button" title="Add repository filter">Add repo</button>
           </div>
 
           <div class="search-row">

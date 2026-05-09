@@ -4,7 +4,6 @@ const detailEl = document.querySelector('#detail');
 const filters = document.querySelector('#filters');
 const repoFilter = document.querySelector('#repoFilter');
 const repoWorktrees = document.querySelector('#repoWorktrees');
-const addRepo = document.querySelector('#addRepo');
 const filterToggle = document.querySelector('#filterToggle');
 const filterClose = document.querySelector('#filterClose');
 const filterDrawer = document.querySelector('#filterDrawer');
@@ -163,6 +162,7 @@ function updateRepoOptions(repos) {
     options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (custom)</option>`);
   }
 
+  options.push('<option value="__add_repo__">+ Add repo...</option>');
   repoFilter.innerHTML = options.join('');
   if (previous && [...repoFilter.options].some((option) => option.value === previous)) repoFilter.value = previous;
 }
@@ -300,7 +300,9 @@ function setDrawerOpen(open) {
 
 function applySavedLayout() {
   const savedWidth = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-  if (savedWidth) document.documentElement.style.setProperty('--sidebar-width', savedWidth);
+  const numericWidth = Number(String(savedWidth ?? '').replace('px', ''));
+  if (numericWidth >= 360) document.documentElement.style.setProperty('--sidebar-width', `${numericWidth}px`);
+  else localStorage.removeItem(SIDEBAR_WIDTH_KEY);
   setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
 }
 
@@ -310,7 +312,7 @@ function setSidebarCollapsed(collapsed) {
 }
 
 function resizeSidebar(clientX) {
-  const min = 280;
+  const min = 360;
   const max = Math.max(min, window.innerWidth - 420);
   const width = Math.min(max, Math.max(min, clientX));
   const value = `${width}px`;
@@ -323,6 +325,19 @@ filters.addEventListener('change', scheduleLoadSessions);
 filters.addEventListener('submit', (event) => event.preventDefault());
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
+repoFilter.addEventListener('change', () => {
+  if (repoFilter.value !== '__add_repo__') return;
+  const previous = [...repoFilter.options].find((option) => option.defaultSelected)?.value || '';
+  const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
+  if (!value) {
+    repoFilter.value = previous;
+    return;
+  }
+  saveCustomRepos([...customRepos(), value]);
+  updateRepoOptions([]);
+  repoFilter.value = value;
+  loadSessions();
+});
 collapseSidebar.addEventListener('click', () => setSidebarCollapsed(true));
 expandSidebar.addEventListener('click', () => setSidebarCollapsed(false));
 splitter.addEventListener('pointerdown', (event) => {
@@ -339,16 +354,6 @@ splitter.addEventListener('pointerup', () => {
   isDraggingSidebar = false;
   document.body.classList.remove('resizing-sidebar');
 });
-addRepo.addEventListener('click', () => {
-  const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
-  if (!value) return;
-  saveCustomRepos([...customRepos(), value]);
-  repoFilter.value = value;
-  updateRepoOptions([]);
-  repoFilter.value = value;
-  loadSessions();
-});
-
 applySavedLayout();
 await loadHealth();
 await loadSessions();
