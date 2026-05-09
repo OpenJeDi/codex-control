@@ -34,3 +34,10 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Provide a clear Stop button for interrupting the active turn via `turn/interrupt`.
 - Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
 - Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
+
+## Session management actions
+
+- Support obvious session rename action, backed by `thread/setName` / thread metadata updates as appropriate.
+- Support obvious archive/unarchive actions in the session list/detail UI.
+- Archived sessions should stay hidden from normal results unless archive search/filter is explicitly enabled.
+- Make destructive-ish actions reversible where possible and confirm only when the consequence is not obvious.
