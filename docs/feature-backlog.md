@@ -56,3 +56,9 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Do not handle review workflows for now.
 - Do not expose the Codex FileSystem API as a general UI for now.
 - Revisit these only after the core session list, prompt bar, live status/events, worktree/session creation, and instruction/model controls are solid.
+
+## Visual design direction
+
+- Move away from the current blue-accent theme toward a calmer grey/dark-neutral interface, closer to Cinny's feel.
+- Use color sparingly for semantic state only: success, warning, error, active/running, approval-needed.
+- Keep the UI dense, quiet, and readable rather than dashboard-bright.
