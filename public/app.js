@@ -200,15 +200,20 @@ async function loadSessions({ quiet = false } = {}) {
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const prompt = new FormData(form).get('prompt');
+  const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
   if (!cwd) return window.alert('Choose a worktree first.');
+  formData.set('cwd', cwd);
 
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
   submit.textContent = 'Starting...';
   try {
-    const data = await jsonApi('/api/threads', { cwd, prompt });
+    const data = await fetch('/api/threads', { method: 'POST', body: formData }).then(async (res) => {
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      return json;
+    });
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);

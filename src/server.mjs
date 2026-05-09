@@ -701,19 +701,25 @@ function safeThreadId(threadId) {
   return String(threadId ?? '').replace(/[^a-zA-Z0-9._-]+/g, '-');
 }
 
-async function buildTurnInput(threadId, thread, req) {
+async function readTurnPayload(req) {
   const contentType = req.headers['content-type'] ?? '';
-  let prompt = '';
-  let files = [];
-
   if (contentType.includes('multipart/form-data')) {
     const parts = parseMultipart(await readBody(req), contentType);
-    prompt = parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '';
-    files = parts.filter((part) => part.name === 'files' && part.filename);
-  } else {
-    const body = await readJson(req);
-    prompt = String(body.prompt ?? '');
+    return {
+      cwd: parts.find((part) => part.name === 'cwd')?.data.toString('utf8') ?? '',
+      prompt: parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '',
+      files: parts.filter((part) => part.name === 'files' && part.filename),
+    };
   }
+
+  const body = await readJson(req);
+  return { ...body, prompt: String(body.prompt ?? ''), files: [] };
+}
+
+async function buildTurnInput(threadId, thread, reqOrPayload) {
+  const payload = reqOrPayload?.headers ? await readTurnPayload(reqOrPayload) : reqOrPayload;
+  const prompt = String(payload?.prompt ?? '');
+  const files = payload?.files ?? [];
 
   const input = [];
   const filePathNotes = [];
@@ -841,13 +847,15 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/threads' && req.method === 'POST') {
-      const body = await readJson(req);
-      const cwd = String(body.cwd ?? '').trim();
+      const payload = await readTurnPayload(req);
+      const cwd = String(payload.cwd ?? '').trim();
       if (!cwd) throw new Error('Choose a worktree first.');
       const started = await codex.startThread(cwd);
       const threadId = started.thread?.id;
-      const prompt = String(body.prompt ?? '').trim();
-      if (threadId && prompt) await codex.startTurn(threadId, [{ type: 'text', text: prompt }]);
+      if (threadId && (String(payload.prompt ?? '').trim() || payload.files?.length)) {
+        const input = await buildTurnInput(threadId, started.thread, payload);
+        await codex.startTurn(threadId, input);
+      }
       sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
       return;
     }
