@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,9 @@ class CodexAppServer {
     this.pending = new Map();
     this.statusByThread = new Map();
     this.eventClients = new Set();
+    this.watchers = [];
+    this.threadsChangedTimer = null;
+    this.lastThreadsChangedAt = 0;
     this.ready = this.start();
   }
 
@@ -57,6 +60,7 @@ class CodexAppServer {
     }).then((result) => {
       this.notify('initialized', {});
       this.info = result;
+      this.watchCodexHome(result.codexHome);
       return result;
     });
   }
@@ -172,6 +176,35 @@ class CodexAppServer {
   broadcast(event, payload) {
     const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of this.eventClients) client.write(data);
+  }
+
+  watchCodexHome(codexHome) {
+    if (!codexHome) return;
+    const sessionsDir = path.join(codexHome, 'sessions');
+    if (!existsSync(sessionsDir)) return;
+
+    try {
+      const watcher = watch(sessionsDir, { recursive: true }, (_eventType, filename) => {
+        const text = String(filename ?? '');
+        if (!text.endsWith('.jsonl')) return;
+        this.scheduleThreadsChanged({ source: 'codex-sessions-watch', path: text });
+      });
+      watcher.on('error', (error) => console.warn('[codex-control] session watch failed:', error.message));
+      this.watchers.push(watcher);
+    } catch (error) {
+      console.warn('[codex-control] session watch unavailable:', error.message);
+    }
+  }
+
+  scheduleThreadsChanged(payload = {}) {
+    if (this.threadsChangedTimer) return;
+    const elapsed = Date.now() - this.lastThreadsChangedAt;
+    const delay = Math.max(250, 4000 - elapsed);
+    this.threadsChangedTimer = setTimeout(() => {
+      this.threadsChangedTimer = null;
+      this.lastThreadsChangedAt = Date.now();
+      this.broadcast('threads-changed', payload);
+    }, delay);
   }
 }
 

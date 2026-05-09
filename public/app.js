@@ -469,13 +469,20 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 }
 
 function connectEvents() {
+  const refreshForThread = (threadId) => {
+    scheduleLoadSessions();
+    if (!threadId || threadId === activeId) scheduleDetailRefresh(activeId, 700);
+  };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const params = payload.params ?? {};
     const threadId = params.threadId ?? params.thread?.id;
-    scheduleLoadSessions();
-    if (!threadId || threadId === activeId) scheduleDetailRefresh(activeId, 700);
+    refreshForThread(threadId);
+  });
+  events.addEventListener('threads-changed', (event) => {
+    const payload = JSON.parse(event.data || '{}');
+    refreshForThread(payload.threadId);
   });
   events.addEventListener('codex-exit', () => {
     statusEl.textContent = 'Codex app-server exited';
