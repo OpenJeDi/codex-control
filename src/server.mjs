@@ -118,6 +118,9 @@ class CodexAppServer {
           title: 'Codex Control',
           version: '0.1.0',
         },
+        capabilities: {
+          experimentalApi: true,
+        },
       }, 15000, { skipReady: true, allowRetry: false });
       this.notify('initialized', {});
       this.info = result;
