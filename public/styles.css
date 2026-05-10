@@ -97,6 +97,27 @@ button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
 .sidebar-actions button { padding: 5px 8px; }
 .sidebar-actions strong { line-height: 1; }
 .sidebar-primary { margin-left: auto; }
+.compact-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 96%, black);
+}
+.sidebar-footer .compact-icon {
+  color: var(--muted);
+}
 .splitter {
   cursor: col-resize;
   touch-action: none;
@@ -174,7 +195,7 @@ body.sidebar-collapsed .splitter { display: none; }
   gap: 8px;
 }
 .check { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; width: max-content; max-width: 100%; }
-.session-list { overflow: auto; }
+.session-list { overflow: auto; flex: 1 1 auto; min-height: 0; }
 .session-group { border-bottom: 1px solid var(--line); }
 .group-title {
   position: sticky;

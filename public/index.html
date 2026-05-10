@@ -17,8 +17,7 @@
         <div class="sidebar-actions">
           <button id="collapseSidebar" type="button" title="Hide sessions">◀</button>
           <strong>Sessions</strong>
-          <button id="runtimeButton" type="button">Runtime</button>
-          <button id="newSessionButton" class="sidebar-primary" type="button">New</button>
+          <button id="newSessionButton" class="sidebar-primary icon-button compact-icon" type="button" title="New session" aria-label="New session">+</button>
         </div>
 
         <form id="filters" class="filters">
@@ -52,6 +51,9 @@
           </div>
         </form>
         <div id="sessionList" class="session-list"></div>
+        <div class="sidebar-footer">
+          <button id="runtimeButton" class="icon-button compact-icon" type="button" title="Runtime access" aria-label="Runtime access">⚙</button>
+        </div>
       </div>
     </section>
 
