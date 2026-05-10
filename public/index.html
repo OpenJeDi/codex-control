@@ -90,8 +90,8 @@
       <div id="newWorktreeHint" class="hint"></div>
 
       <div class="model-controls modal-model-controls" title="Applies to the first normal turn in this session and is remembered locally.">
-        <select name="model" aria-label="Model">
-          <option value="">config model</option>
+        <span class="setting-source inherited" data-source-for="model" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="model" aria-label="Model" data-explicit="0">
           <option value="gpt-5.5">gpt-5.5</option>
           <option value="gpt-5.4">gpt-5.4</option>
           <option value="gpt-5.4-mini">gpt-5.4-mini</option>
@@ -99,31 +99,43 @@
           <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
           <option value="gpt-5.2">gpt-5.2</option>
         </select>
-        <select name="effort" aria-label="Thinking level">
-          <option value="">config thinking</option>
+        <input type="hidden" name="model" value="">
+        <span class="setting-source inherited" data-source-for="effort" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="0">
           <option value="low">low</option>
           <option value="medium">medium</option>
           <option value="high">high</option>
           <option value="xhigh">xhigh</option>
         </select>
+        <input type="hidden" name="effort" value="">
       </div>
 
       <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session and is remembered locally.">
-        <select name="sandboxPolicy" aria-label="Sandbox policy">
-          <option value="">config sandbox</option>
-          <option value="readOnly">read only</option>
-          <option value="workspaceWrite">workspace write</option>
-          <option value="dangerFullAccess">danger full access</option>
+        <span class="setting-source inherited" data-source-for="permission" title="Using config value" aria-hidden="true"></span>
+        <select name="permissionPreset" aria-label="Permission preset" data-explicit="0">
+          <option value="review">review only</option>
+          <option value="normal">normal coding</option>
+          <option value="trusted">trusted local</option>
+          <option value="full">full autonomous</option>
         </select>
-        <select name="approvalPolicy" aria-label="Approval policy">
-          <option value="">config approvals</option>
-          <option value="untrusted">untrusted only</option>
-          <option value="on-failure">on failure</option>
-          <option value="on-request">on request</option>
-          <option value="granular">granular</option>
-          <option value="never">never approve</option>
-        </select>
+        <input type="hidden" name="sandboxPolicy" value="">
+        <input type="hidden" name="approvalPolicy" value="">
         <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"> network</label>
+        <details class="permission-advanced">
+          <summary>Advanced</summary>
+          <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
+            <option value="readOnly">read only</option>
+            <option value="workspaceWrite">workspace write</option>
+            <option value="dangerFullAccess">danger full access</option>
+          </select>
+          <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
+            <option value="untrusted">untrusted only</option>
+            <option value="on-failure">on failure</option>
+            <option value="on-request">on request</option>
+            <option value="granular">granular</option>
+            <option value="never">never approve</option>
+          </select>
+        </details>
       </div>
 
       <label>

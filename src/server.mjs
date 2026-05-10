@@ -125,6 +125,7 @@ class CodexAppServer {
     if (!status && (lower.includes('turnstarted') || lower.includes('turn/started'))) status = { type: 'running' };
     if (!status && (lower.includes('turncompleted') || lower.includes('turn/completed'))) status = { type: 'idle' };
     if (!status && lower.includes('interrupt')) status = { type: 'idle' };
+    if (!status && lower.includes('requestapproval')) status = { type: 'waitingOnApproval' };
     if (!status && lower.includes('error')) status = { type: 'error' };
     if (!status) return;
 
@@ -1676,6 +1677,64 @@ async function runtimeDiagnostics() {
   };
 }
 
+async function appSettings() {
+  await codex.ready;
+  const [configResult, modelResult] = await Promise.all([
+    codex.request('config/read', { includeLayers: false }).catch(() => ({})),
+    codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
+  ]);
+  const config = normalizeConfigSettings(configResult?.config ?? configResult ?? {});
+  const models = Array.isArray(modelResult?.data) ? modelResult.data.map(compactModelInfo).filter((model) => model.id) : [];
+  return { config, models };
+}
+
+function compactModelInfo(model = {}) {
+  const id = normalizeModelValue(model.id ?? model.model ?? model.name);
+  return {
+    id,
+    model: normalizeModelValue(model.model ?? id),
+    displayName: String(model.displayName ?? model.name ?? id),
+    defaultReasoningEffort: normalizeEffortValue(model.defaultReasoningEffort),
+    supportedReasoningEfforts: (model.supportedReasoningEfforts ?? [])
+      .map((entry) => normalizeEffortValue(entry?.reasoningEffort ?? entry))
+      .filter(Boolean),
+  };
+}
+
+function normalizeConfigSettings(config = {}) {
+  const model = normalizeModelValue(config.model ?? config.model_id ?? config.modelId ?? config.modelName);
+  const effort = normalizeEffortValue(config.model_reasoning_effort ?? config.modelReasoningEffort ?? config.reasoning_effort ?? config.reasoningEffort ?? config.effort);
+  return {
+    model,
+    effort,
+    sandboxPolicy: normalizeSandboxPolicyValue(config.sandbox_mode ?? config.sandboxMode ?? config.sandboxPolicy ?? config.sandbox),
+    approvalPolicy: normalizeApprovalPolicyValue(config.approval_policy ?? config.approvalPolicy ?? config.approval),
+    networkAccess: Boolean(config.sandboxPolicy?.networkAccess ?? config.sandbox?.networkAccess ?? config.networkAccess ?? config.network_access),
+  };
+}
+
+function normalizeSandboxPolicyValue(value) {
+  const raw = typeof value === 'object' ? value?.type : value;
+  const text = String(raw ?? '').trim();
+  const normalized = text.replace(/[_\s-]+/g, '').toLowerCase();
+  if (normalized === 'readonly') return 'readOnly';
+  if (normalized === 'workspacewrite') return 'workspaceWrite';
+  if (normalized === 'dangerfullaccess') return 'dangerFullAccess';
+  return '';
+}
+
+function normalizeApprovalPolicyValue(value) {
+  const text = String(value ?? '').trim();
+  const normalized = text.replace(/[_\s]+/g, '-').replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+  const aliases = {
+    onrequest: 'on-request',
+    onfailure: 'on-failure',
+    unlesstrusted: 'untrusted',
+  };
+  const candidate = aliases[normalized.replace(/-/g, '')] ?? normalized;
+  return ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(candidate) ? candidate : '';
+}
+
 function sendMediaPath(res, filePath) {
   const media = mediaFromLocalFilePath(filePath);
   if (!media) {
@@ -1739,6 +1798,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/runtime' && req.method === 'GET') {
       sendJson(res, 200, await runtimeDiagnostics());
+      return;
+    }
+
+    if (url.pathname === '/api/settings' && req.method === 'GET') {
+      sendJson(res, 200, await appSettings());
       return;
     }
 

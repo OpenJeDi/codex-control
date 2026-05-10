@@ -25,8 +25,8 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 
 - Implemented: show the model used by the active session in the session UI, with source-aware status (`thread.modelSource`) visible in session/turn rendering.
 - Implemented: model and thinking controls in the new-session modal and existing-session composer. These are browser-local defaults plus per-session preferences and are sent as `turn/start` overrides for the next normal turn.
-- Remaining: move the static model list to Codex model/provider capability data where available, and make unavailable/unsupported combinations explicit.
-- The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
+- Implemented: model choices are loaded from Codex app-server `model/list` when available, with a static fallback. The effective config value is selected directly in the dropdown and a subtle source dot distinguishes inherited config values from explicit overrides.
+- Remaining: make unavailable/unsupported provider combinations explicit when Codex exposes enough provider capability data.
 
 ## Prompt queue, steering, interruption, and approval UX
 
@@ -36,7 +36,8 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 - Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
 - Implemented: clear Stop action interrupts the active turn with verified `turn/interrupt` params, renders a stopped break line, and clears stale local busy state when app-server has no active turn.
 - Follow-up polish: persist queued-message annotations across app restarts if this proves necessary.
-- Follow-up: add blocked-agent UX for app-server command/file/tool approval prompts and credit/rate-limit/account-blocked states. Approval prompts should send decisions back to app-server; account/credit blocks should be shown as actionable blocking states with recovery guidance.
+- Implemented: app-server approval request notifications mark the session as approval-blocked and show an explicit warning that Codex Control cannot answer approval prompts yet.
+- Follow-up: add full approval UX for app-server command/file/tool approval prompts and credit/rate-limit/account-blocked states. Approval prompts should send decisions back to app-server; account/credit blocks should be shown as actionable blocking states with recovery guidance.
 - Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
 - Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
 

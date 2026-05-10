@@ -62,6 +62,13 @@ const MODEL_DEFAULTS_KEY = 'codex-control.modelDefaults';
 const MODEL_THREADS_KEY = 'codex-control.modelThreads';
 const MODEL_OPTIONS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2'];
 const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'];
+const PERMISSION_PRESETS = [
+  { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
+  { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
+  { id: 'trusted', label: 'trusted local', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'untrusted', networkAccess: false },
+  { id: 'full', label: 'full autonomous', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'never', networkAccess: false },
+];
+let appSettings = { config: {}, models: [] };
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const truncate = (value, max = 12000) => {
@@ -389,6 +396,10 @@ function normalizePermissionPreference(value = {}) {
   };
 }
 
+function configPermissionPreference() {
+  return normalizePermissionPreference(appSettings.config ?? {});
+}
+
 function preferenceFromServerSettings(settings = {}) {
   return normalizePermissionPreference({
     sandboxPolicy: settings.sandboxPolicy?.type || '',
@@ -398,29 +409,53 @@ function preferenceFromServerSettings(settings = {}) {
 }
 
 function effectivePermissionPreference(threadId = '', serverSettings = {}) {
+  const defaults = permissionDefaults();
+  const server = preferenceFromServerSettings(serverSettings);
+  const thread = threadId ? permissionForThread(threadId) ?? {} : {};
+  const explicit = Boolean(
+    defaults.sandboxPolicy || defaults.approvalPolicy || defaults.networkAccess ||
+    server.sandboxPolicy || server.approvalPolicy || server.networkAccess ||
+    thread.sandboxPolicy || thread.approvalPolicy || thread.networkAccess
+  );
   return {
-    ...permissionDefaults(),
-    ...preferenceFromServerSettings(serverSettings),
-    ...(threadId ? permissionForThread(threadId) ?? {} : {}),
+    ...configPermissionPreference(),
+    ...defaults,
+    ...server,
+    ...thread,
+    explicit,
   };
 }
 
 function preferenceFromControls(root) {
+  const explicit = root?.querySelector('[name="permissionPreset"]')?.dataset.explicit === '1';
   return normalizePermissionPreference({
     sandboxPolicy: root?.querySelector('[name="sandboxPolicy"]')?.value || '',
     approvalPolicy: root?.querySelector('[name="approvalPolicy"]')?.value || '',
-    networkAccess: Boolean(root?.querySelector('[name="networkAccess"]')?.checked),
+    networkAccess: explicit && Boolean(root?.querySelector('[name="networkAccess"]')?.checked),
   });
 }
 
 function applyPermissionPreference(root, pref = permissionDefaults()) {
   const normalized = normalizePermissionPreference(pref);
+  const effective = { ...configPermissionPreference(), ...normalized };
+  const explicit = Boolean(normalized.sandboxPolicy || normalized.approvalPolicy || normalized.networkAccess);
   const sandbox = root?.querySelector('[name="sandboxPolicy"]');
   const approval = root?.querySelector('[name="approvalPolicy"]');
   const network = root?.querySelector('[name="networkAccess"]');
-  if (sandbox) sandbox.value = normalized.sandboxPolicy;
-  if (approval) approval.value = normalized.approvalPolicy;
-  if (network) network.checked = normalized.networkAccess;
+  const rawSandbox = root?.querySelector('[name="sandboxPolicyRaw"]');
+  const rawApproval = root?.querySelector('[name="approvalPolicyRaw"]');
+  const preset = root?.querySelector('[name="permissionPreset"]');
+  if (sandbox) sandbox.value = explicit ? normalized.sandboxPolicy : '';
+  if (approval) approval.value = explicit ? normalized.approvalPolicy : '';
+  if (rawSandbox) rawSandbox.value = effective.sandboxPolicy;
+  if (rawApproval) rawApproval.value = effective.approvalPolicy;
+  if (network) network.checked = effective.networkAccess;
+  if (preset) {
+    ensurePermissionPresetOption(preset, effective);
+    preset.value = permissionPresetId(effective);
+    preset.dataset.explicit = explicit ? '1' : '0';
+  }
+  updateSettingSource(root?.querySelector('[data-source-for="permission"]'), explicit);
 }
 
 function savePermissionDefaults(pref) {
@@ -445,15 +480,89 @@ function permissionPayload(pref = permissionDefaults()) {
 
 function bindPermissionPreferenceControls(root, threadId = '') {
   const bindingKey = threadId || 'global';
-  root?.querySelectorAll('[name="sandboxPolicy"], [name="approvalPolicy"], [name="networkAccess"]').forEach((control) => {
+  root?.querySelectorAll('[name="permissionPreset"], [name="sandboxPolicyRaw"], [name="approvalPolicyRaw"], [name="networkAccess"]').forEach((control) => {
     if (control.dataset.permissionBinding === bindingKey) return;
     control.dataset.permissionBinding = bindingKey;
     control.addEventListener('change', () => {
+      syncPermissionControls(root, control);
       const pref = preferenceFromControls(root);
       savePermissionDefaults(pref);
       if (threadId) saveThreadPermission(threadId, pref);
     });
   });
+  syncPermissionControls(root);
+}
+
+function permissionPresetId(pref = {}) {
+  const normalized = normalizePermissionPreference(pref);
+  const match = PERMISSION_PRESETS.find((preset) =>
+    preset.sandboxPolicy === normalized.sandboxPolicy &&
+    preset.approvalPolicy === normalized.approvalPolicy &&
+    Boolean(preset.networkAccess) === Boolean(normalized.networkAccess)
+  );
+  return match?.id ?? 'custom';
+}
+
+function permissionPresetLabel(pref = {}) {
+  const normalized = normalizePermissionPreference(pref);
+  const preset = PERMISSION_PRESETS.find((entry) => entry.id === permissionPresetId(normalized));
+  if (preset) return preset.label;
+  const sandbox = normalized.sandboxPolicy || 'config sandbox';
+  const approval = normalized.approvalPolicy || 'config approvals';
+  return `${sandbox} / ${approval}${normalized.networkAccess ? ' / network' : ''}`;
+}
+
+function permissionPresetById(id) {
+  return PERMISSION_PRESETS.find((preset) => preset.id === id) ?? null;
+}
+
+function ensurePermissionPresetOption(select, pref = {}) {
+  const id = permissionPresetId(pref);
+  if (id !== 'custom' || !select || [...select.options].some((option) => option.value === 'custom')) return;
+  select.insertAdjacentHTML('beforeend', `<option value="custom">${escapeHtml(permissionPresetLabel(pref))}</option>`);
+}
+
+function syncPermissionControls(root, changedControl = null) {
+  if (!root) return;
+  const preset = root.querySelector('[name="permissionPreset"]');
+  const sandbox = root.querySelector('[name="sandboxPolicy"]');
+  const approval = root.querySelector('[name="approvalPolicy"]');
+  const network = root.querySelector('[name="networkAccess"]');
+  const rawSandbox = root.querySelector('[name="sandboxPolicyRaw"]');
+  const rawApproval = root.querySelector('[name="approvalPolicyRaw"]');
+  if (!preset || !sandbox || !approval) return;
+
+  let explicit = preset.dataset.explicit === '1';
+  if (changedControl) explicit = true;
+
+  if (changedControl === preset) {
+    const selected = permissionPresetById(preset.value);
+    if (selected) {
+      if (rawSandbox) rawSandbox.value = selected.sandboxPolicy;
+      if (rawApproval) rawApproval.value = selected.approvalPolicy;
+      if (network) network.checked = selected.networkAccess;
+    }
+  } else if (changedControl === rawSandbox || changedControl === rawApproval || changedControl === network) {
+    const rawPref = normalizePermissionPreference({
+      sandboxPolicy: rawSandbox?.value || '',
+      approvalPolicy: rawApproval?.value || '',
+      networkAccess: Boolean(network?.checked),
+    });
+    ensurePermissionPresetOption(preset, rawPref);
+    preset.value = permissionPresetId(rawPref);
+  }
+
+  const current = normalizePermissionPreference({
+    sandboxPolicy: rawSandbox?.value || '',
+    approvalPolicy: rawApproval?.value || '',
+    networkAccess: Boolean(network?.checked),
+  });
+  ensurePermissionPresetOption(preset, current);
+  preset.value = permissionPresetId(current);
+  preset.dataset.explicit = explicit ? '1' : '0';
+  sandbox.value = explicit ? current.sandboxPolicy : '';
+  approval.value = explicit ? current.approvalPolicy : '';
+  updateSettingSource(root.querySelector('[data-source-for="permission"]'), explicit);
 }
 
 function modelDefaults() {
@@ -478,10 +587,26 @@ function normalizeModelPreference(value = {}) {
   };
 }
 
-function effectiveModelPreference(threadId = '') {
+function configModelPreference() {
+  const fromConfig = normalizeModelPreference(appSettings.config ?? {});
+  const firstModel = modelOptions()[0]?.id || MODEL_OPTIONS[0] || '';
   return {
-    ...modelDefaults(),
-    ...(threadId ? modelForThread(threadId) ?? {} : {}),
+    model: fromConfig.model || firstModel,
+    effort: fromConfig.effort || effortOptionsForModel(fromConfig.model || firstModel)[0] || 'medium',
+  };
+}
+
+function effectiveModelPreference(threadId = '') {
+  const defaults = modelDefaults();
+  const thread = threadId ? modelForThread(threadId) ?? {} : {};
+  const explicitModel = Boolean(thread.model || defaults.model);
+  const explicitEffort = Boolean(thread.effort || defaults.effort);
+  const config = configModelPreference();
+  return {
+    model: thread.model || defaults.model || config.model,
+    effort: thread.effort || defaults.effort || config.effort,
+    explicitModel,
+    explicitEffort,
   };
 }
 
@@ -494,13 +619,27 @@ function modelPreferenceFromControls(root) {
 
 function applyModelPreference(root, pref = modelDefaults()) {
   const normalized = normalizeModelPreference(pref);
-  const model = root?.querySelector('[name="model"]');
-  const effort = root?.querySelector('[name="effort"]');
+  const effective = { ...configModelPreference(), ...normalized };
+  const explicitModel = Boolean(normalized.model);
+  const explicitEffort = Boolean(normalized.effort);
+  const model = root?.querySelector('[data-setting-kind="model"]');
+  const effort = root?.querySelector('[data-setting-kind="effort"]');
+  const modelValue = root?.querySelector('[name="model"]');
+  const effortValue = root?.querySelector('[name="effort"]');
   if (model) {
-    ensureModelOption(model, normalized.model);
-    model.value = normalized.model;
+    renderModelOptions(model, effective.model);
+    model.value = effective.model;
+    model.dataset.explicit = explicitModel ? '1' : '0';
   }
-  if (effort) effort.value = normalized.effort;
+  if (effort) {
+    renderEffortOptions(effort, effective.model, effective.effort);
+    effort.value = effective.effort;
+    effort.dataset.explicit = explicitEffort ? '1' : '0';
+  }
+  if (modelValue) modelValue.value = explicitModel ? normalized.model : '';
+  if (effortValue) effortValue.value = explicitEffort ? normalized.effort : '';
+  updateSettingSource(root?.querySelector('[data-source-for="model"]'), explicitModel);
+  updateSettingSource(root?.querySelector('[data-source-for="effort"]'), explicitEffort);
 }
 
 function saveModelDefaults(pref) {
@@ -524,20 +663,89 @@ function modelPayload(pref = modelDefaults()) {
 
 function bindModelPreferenceControls(root, threadId = '') {
   const bindingKey = threadId || 'global';
-  root?.querySelectorAll('[name="model"], [name="effort"]').forEach((control) => {
+  root?.querySelectorAll('[data-setting-kind="model"], [data-setting-kind="effort"]').forEach((control) => {
     if (control.dataset.modelBinding === bindingKey) return;
     control.dataset.modelBinding = bindingKey;
     control.addEventListener('change', () => {
+      syncModelControls(root, control);
       const pref = modelPreferenceFromControls(root);
       saveModelDefaults(pref);
       if (threadId) saveThreadModel(threadId, pref);
     });
   });
+  syncModelControls(root);
 }
 
 function ensureModelOption(select, model) {
   if (!select || !model || [...select.options].some((option) => option.value === model)) return;
   select.insertAdjacentHTML('beforeend', `<option value="${escapeAttribute(model)}">${escapeHtml(model)}</option>`);
+}
+
+function modelOptions() {
+  const fromServer = (appSettings.models ?? []).map((model) => ({
+    id: normalizeModelValue(model.id ?? model.model),
+    label: model.displayName && model.displayName !== (model.id ?? model.model) ? `${model.displayName} (${model.id ?? model.model})` : (model.id ?? model.model),
+    defaultReasoningEffort: effortFromValue(model.defaultReasoningEffort),
+    supportedReasoningEfforts: (model.supportedReasoningEfforts ?? []).map(effortFromValue).filter(Boolean),
+  })).filter((model) => model.id);
+  const fallback = MODEL_OPTIONS.map((model) => ({ id: model, label: model, defaultReasoningEffort: '', supportedReasoningEfforts: EFFORT_OPTIONS }));
+  const seen = new Set();
+  return [...fromServer, ...fallback].filter((model) => {
+    if (seen.has(model.id)) return false;
+    seen.add(model.id);
+    return true;
+  });
+}
+
+function effortOptionsForModel(model) {
+  const found = modelOptions().find((entry) => entry.id === model);
+  const efforts = found?.supportedReasoningEfforts?.length ? found.supportedReasoningEfforts : EFFORT_OPTIONS;
+  return efforts.filter((effort) => EFFORT_OPTIONS.includes(effort));
+}
+
+function renderModelOptions(select, selected = '') {
+  if (!select) return;
+  const options = modelOptions();
+  select.innerHTML = options.map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selected ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('');
+  ensureModelOption(select, selected);
+}
+
+function renderEffortOptions(select, model, selected = '') {
+  if (!select) return;
+  const efforts = [...new Set([...effortOptionsForModel(model), selected].filter(Boolean))];
+  select.innerHTML = efforts.map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selected ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('');
+}
+
+function syncModelControls(root, changedControl = null) {
+  if (!root) return;
+  const model = root.querySelector('[data-setting-kind="model"]');
+  const effort = root.querySelector('[data-setting-kind="effort"]');
+  const modelValue = root.querySelector('[name="model"]');
+  const effortValue = root.querySelector('[name="effort"]');
+  if (!model || !effort || !modelValue || !effortValue) return;
+  if (changedControl === model) {
+    model.dataset.explicit = '1';
+    if (effort.dataset.explicit !== '1') {
+      const options = effortOptionsForModel(model.value);
+      const defaultEffort = modelOptions().find((entry) => entry.id === model.value)?.defaultReasoningEffort || options[0] || effort.value;
+      renderEffortOptions(effort, model.value, defaultEffort);
+      effort.value = defaultEffort;
+    } else {
+      renderEffortOptions(effort, model.value, effort.value);
+    }
+  }
+  if (changedControl === effort) effort.dataset.explicit = '1';
+  modelValue.value = model.dataset.explicit === '1' ? model.value : '';
+  effortValue.value = effort.dataset.explicit === '1' ? effort.value : '';
+  updateSettingSource(root.querySelector('[data-source-for="model"]'), model.dataset.explicit === '1');
+  updateSettingSource(root.querySelector('[data-source-for="effort"]'), effort.dataset.explicit === '1');
+}
+
+function updateSettingSource(dot, explicit) {
+  if (!dot) return;
+  dot.classList.toggle('explicit', Boolean(explicit));
+  dot.classList.toggle('inherited', !explicit);
+  dot.title = explicit ? 'Explicit override' : 'Using config value';
 }
 
 function normalizeRepoInput(value) {
@@ -613,6 +821,18 @@ async function jsonApi(path, body) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function loadSettings() {
+  try {
+    const settings = await api('/api/settings');
+    appSettings = {
+      config: settings.config ?? {},
+      models: Array.isArray(settings.models) ? settings.models : [],
+    };
+  } catch {
+    appSettings = { config: {}, models: [] };
+  }
 }
 
 async function loadHealth() {
@@ -1115,6 +1335,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
     </div>
     <div class="detail">
       ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
+      ${renderApprovalBlockedIndicator(thread)}
       ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
@@ -1138,6 +1359,14 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   </div>`;
 }
 
+function renderApprovalBlockedIndicator(thread) {
+  if (statusClass(thread) !== 'waitingonapproval') return '';
+  return `<div class="blocked-indicator">
+    <strong>Approval required</strong>
+    <span>Codex Control cannot answer approval prompts yet. Use never approve, or continue this session in Codex app/CLI.</span>
+  </div>`;
+}
+
 function selectedAttribute(value, expected) {
   return value === expected ? ' selected' : '';
 }
@@ -1148,40 +1377,55 @@ function checkedAttribute(value) {
 
 function renderModelControls(settings = {}, extraClass = '') {
   const normalized = normalizeModelPreference(settings);
-  const models = [...new Set([...MODEL_OPTIONS, normalized.model].filter(Boolean))];
+  const selectedModel = normalized.model || configModelPreference().model;
+  const selectedEffort = normalized.effort || configModelPreference().effort;
+  const explicitModel = Boolean(settings.explicitModel);
+  const explicitEffort = Boolean(settings.explicitEffort);
   return `<div class="model-controls ${escapeHtml(extraClass)}" title="Applies to the next normal turn. Steer cannot change model or thinking.">
-    <select name="model" aria-label="Model">
-      <option value="">config model</option>
-      ${models.map((model) => `<option value="${escapeAttribute(model)}"${model === normalized.model ? ' selected' : ''}>${escapeHtml(model)}</option>`).join('')}
+    <span class="setting-source ${explicitModel ? 'explicit' : 'inherited'}" data-source-for="model" title="${explicitModel ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select data-setting-kind="model" aria-label="Model" data-explicit="${explicitModel ? '1' : '0'}">
+      ${modelOptions().map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('')}
     </select>
-    <select name="effort" aria-label="Thinking level">
-      <option value="">config thinking</option>
-      ${EFFORT_OPTIONS.map((effort) => `<option value="${escapeAttribute(effort)}"${effort === normalized.effort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
+    <input type="hidden" name="model" value="${explicitModel ? escapeAttribute(selectedModel) : ''}">
+    <span class="setting-source ${explicitEffort ? 'explicit' : 'inherited'}" data-source-for="effort" title="${explicitEffort ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="${explicitEffort ? '1' : '0'}">
+      ${[...new Set([...effortOptionsForModel(selectedModel), selectedEffort].filter(Boolean))].map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selectedEffort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
     </select>
+    <input type="hidden" name="effort" value="${explicitEffort ? escapeAttribute(selectedEffort) : ''}">
   </div>`;
 }
 
 function renderPermissionControls(settings = {}) {
   const normalized = normalizePermissionPreference(settings);
-  const sandbox = normalized.sandboxPolicy;
-  const approval = normalized.approvalPolicy;
+  const sandbox = normalized.sandboxPolicy || configPermissionPreference().sandboxPolicy;
+  const approval = normalized.approvalPolicy || configPermissionPreference().approvalPolicy;
   const network = normalized.networkAccess;
+  const explicit = Boolean(settings.explicit);
+  const presetId = permissionPresetId({ sandboxPolicy: sandbox, approvalPolicy: approval, networkAccess: network });
   return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
-    <select name="sandboxPolicy" aria-label="Sandbox policy">
-      <option value=""${selectedAttribute(sandbox, '')}>config sandbox</option>
-      <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
-      <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
-      <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+    <span class="setting-source ${explicit ? 'explicit' : 'inherited'}" data-source-for="permission" title="${explicit ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select name="permissionPreset" aria-label="Permission preset" data-explicit="${explicit ? '1' : '0'}">
+      ${PERMISSION_PRESETS.map((preset) => `<option value="${escapeAttribute(preset.id)}"${preset.id === presetId ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
+      ${presetId === 'custom' ? `<option value="custom" selected>${escapeHtml(permissionPresetLabel({ sandboxPolicy: sandbox, approvalPolicy: approval, networkAccess: network }))}</option>` : ''}
     </select>
-    <select name="approvalPolicy" aria-label="Approval policy">
-      <option value=""${selectedAttribute(approval, '')}>config approvals</option>
-      <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
-      <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
-      <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
-      <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
-      <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
-    </select>
+    <input type="hidden" name="sandboxPolicy" value="${explicit ? escapeAttribute(normalized.sandboxPolicy) : ''}">
+    <input type="hidden" name="approvalPolicy" value="${explicit ? escapeAttribute(normalized.approvalPolicy) : ''}">
     <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"${checkedAttribute(network)}> network</label>
+    <details class="permission-advanced">
+      <summary>Advanced</summary>
+      <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
+        <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
+        <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
+        <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+      </select>
+      <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
+        <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
+        <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
+        <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
+        <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
+        <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
+      </select>
+    </details>
   </div>`;
 }
 
@@ -2009,4 +2253,5 @@ bindImageLightbox();
 connectEvents();
 setInterval(refreshAgeIndicators, 30 * 1000);
 await loadHealth();
+await loadSettings();
 await loadSessions();
