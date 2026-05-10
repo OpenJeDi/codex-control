@@ -31,9 +31,32 @@ const lightboxImage = document.querySelector('#lightboxImage');
 const newSessionDialog = document.querySelector('#newSessionDialog');
 const newSessionForm = document.querySelector('#newSessionForm');
 const newRepoSelect = document.querySelector('#newRepoSelect');
+const addRepoButton = document.querySelector('#addRepoButton');
+const addRepoDialog = document.querySelector('#addRepoDialog');
+const addRepoForm = document.querySelector('#addRepoForm');
+const closeAddRepo = document.querySelector('#closeAddRepo');
+const cancelAddRepo = document.querySelector('#cancelAddRepo');
+const confirmAddRepo = document.querySelector('#confirmAddRepo');
+const repoUrlInput = document.querySelector('#repoUrlInput');
+const repoDisplayPreview = document.querySelector('#repoDisplayPreview');
+const repoValuePreview = document.querySelector('#repoValuePreview');
+const repoError = document.querySelector('#repoError');
+const newSessionNameInput = document.querySelector('#newSessionNameInput');
 const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
 const newWorktreeHint = document.querySelector('#newWorktreeHint');
 const createWorktreeButton = document.querySelector('#createWorktreeButton');
+const createWorktreeDialog = document.querySelector('#createWorktreeDialog');
+const createWorktreeForm = document.querySelector('#createWorktreeForm');
+const closeCreateWorktree = document.querySelector('#closeCreateWorktree');
+const cancelCreateWorktree = document.querySelector('#cancelCreateWorktree');
+const confirmCreateWorktree = document.querySelector('#confirmCreateWorktree');
+const worktreeNameInput = document.querySelector('#worktreeNameInput');
+const worktreeRootInput = document.querySelector('#worktreeRootInput');
+const planSource = document.querySelector('#planSource');
+const planBranch = document.querySelector('#planBranch');
+const planWorktree = document.querySelector('#planWorktree');
+const planCommand = document.querySelector('#planCommand');
+const planError = document.querySelector('#planError');
 const closeNewSession = document.querySelector('#closeNewSession');
 const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
@@ -41,11 +64,26 @@ let debounceTimer = null;
 let detailRefreshTimer = null;
 let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+let newSessionWorktrees = [];
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
+const ACTIVE_SESSION_KEY = 'codex-control.activeSession';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
+const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
+const PERMISSION_THREADS_KEY = 'codex-control.permissionThreads';
+const MODEL_DEFAULTS_KEY = 'codex-control.modelDefaults';
+const MODEL_THREADS_KEY = 'codex-control.modelThreads';
+const MODEL_OPTIONS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2'];
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'];
+const PERMISSION_PRESETS = [
+  { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
+  { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
+  { id: 'trusted', label: 'trusted local', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'untrusted', networkAccess: false },
+  { id: 'full', label: 'full autonomous', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'never', networkAccess: false },
+];
+let appSettings = { config: {}, models: [] };
 
 const transcriptRenderContext = createTranscriptRenderContext();
 let transcriptBlockRenderer;
@@ -281,6 +319,44 @@ function restoreOpenTurnDetails(open) {
   });
 }
 
+function restoreSessionDetailsOpen(open) {
+  const details = detailEl.querySelector('.session-meta');
+  if (details) details.open = Boolean(open);
+}
+function captureScrollAnchor(scroller) {
+  if (!scroller) return null;
+  const turns = [...scroller.querySelectorAll('.turn[data-turn-id]')];
+  const top = scroller.getBoundingClientRect().top;
+  let best = null;
+  for (const turn of turns) {
+    const rect = turn.getBoundingClientRect();
+    if (rect.bottom < top) continue;
+    best = {
+      turnId: turn.dataset.turnId,
+      offset: rect.top - top,
+    };
+    break;
+  }
+  return best;
+}
+
+function restoreScrollAnchor(scroller, anchor, fallbackScrollTop = 0) {
+  if (!scroller) return;
+  if (!anchor?.turnId) {
+    scroller.scrollTop = fallbackScrollTop;
+    return;
+  }
+  const target = scroller.querySelector(`.turn[data-turn-id="${CSS.escape(anchor.turnId)}"]`);
+  if (!target) {
+    scroller.scrollTop = fallbackScrollTop;
+    return;
+  }
+  const top = scroller.getBoundingClientRect().top;
+  const rect = target.getBoundingClientRect();
+  scroller.scrollTop += rect.top - top - anchor.offset;
+}
+
+
 function bindDetailScrollControls() {
   const scroller = detailEl.querySelector('.detail-shell .detail');
   const button = detailEl.querySelector('.jump-bottom');
@@ -297,6 +373,24 @@ function displayRepo(originUrl) {
   const match = text.match(/[:/]([^/:/]+\/[^/:/]+?)(?:\.git)?$/);
   if (match) return match[1];
   return text.replace(/\.git$/, '');
+}
+
+function repoWebUrl(originUrl) {
+  const text = String(originUrl ?? '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text.replace(/\.git$/, '');
+  const ssh = text.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  const sshUrl = text.match(/^ssh:\/\/git@([^/]+)\/(.+?)(?:\.git)?$/);
+  if (sshUrl) return `https://${sshUrl[1]}/${sshUrl[2]}`;
+  return '';
+}
+
+function renderRepoLink(originUrl) {
+  const label = displayRepo(originUrl);
+  const url = repoWebUrl(originUrl);
+  if (!url) return escapeHtml(originUrl || '');
+  return `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
 }
 
 function customRepos() {
@@ -318,9 +412,487 @@ function saveSelectedRepo(repo) {
   else localStorage.removeItem(SELECTED_REPO_KEY);
 }
 
+function savedActiveSession() {
+  return localStorage.getItem(ACTIVE_SESSION_KEY) || '';
+}
+
+function saveActiveSession(id) {
+  const value = String(id ?? '').trim();
+  if (value) localStorage.setItem(ACTIVE_SESSION_KEY, value);
+  else localStorage.removeItem(ACTIVE_SESSION_KEY);
+}
+
 function saveCustomRepos(repos) {
   localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
+function readJsonLocalStorage(key, fallback) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function permissionDefaults() {
+  return normalizePermissionPreference(readJsonLocalStorage(PERMISSION_DEFAULTS_KEY, {}));
+}
+
+function permissionThreadPrefs() {
+  return readJsonLocalStorage(PERMISSION_THREADS_KEY, {});
+}
+
+function permissionForThread(threadId) {
+  const prefs = permissionThreadPrefs();
+  return Object.prototype.hasOwnProperty.call(prefs, String(threadId)) ? normalizePermissionPreference(prefs[String(threadId)]) : null;
+}
+
+function normalizePermissionPreference(value = {}) {
+  const sandboxPolicy = String(typeof value.sandboxPolicy === 'object' ? value.sandboxPolicy?.type : value.sandboxPolicy ?? '').trim();
+  const approvalPolicy = String(value.approvalPolicy ?? '').trim();
+  return {
+    sandboxPolicy: ['readOnly', 'workspaceWrite', 'dangerFullAccess'].includes(sandboxPolicy) ? sandboxPolicy : '',
+    approvalPolicy: ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy) ? approvalPolicy : '',
+    networkAccess: Boolean(value.networkAccess),
+  };
+}
+
+function configPermissionPreference() {
+  return normalizePermissionPreference(appSettings.config ?? {});
+}
+
+function preferenceFromServerSettings(settings = {}) {
+  return normalizePermissionPreference({
+    sandboxPolicy: settings.sandboxPolicy?.type || '',
+    approvalPolicy: settings.approvalPolicy || '',
+    networkAccess: Boolean(settings.sandboxPolicy?.networkAccess),
+  });
+}
+
+function effectivePermissionPreference(threadId = '', serverSettings = {}) {
+  const defaults = permissionDefaults();
+  const server = preferenceFromServerSettings(serverSettings);
+  const thread = threadId ? permissionForThread(threadId) ?? {} : {};
+  const config = configPermissionPreference();
+  const effective = {
+    ...config,
+    ...defaults,
+    ...server,
+    ...thread,
+  };
+  return {
+    ...effective,
+    explicit: isPermissionExplicit(effective, config),
+  };
+}
+
+function preferenceFromControls(root) {
+  const explicit = root?.querySelector('[name="permissionPreset"]')?.dataset.explicit === '1';
+  return normalizePermissionPreference({
+    sandboxPolicy: root?.querySelector('[name="sandboxPolicy"]')?.value || '',
+    approvalPolicy: root?.querySelector('[name="approvalPolicy"]')?.value || '',
+    networkAccess: explicit && Boolean(root?.querySelector('[name="networkAccess"]')?.checked),
+  });
+}
+
+function applyPermissionPreference(root, pref = permissionDefaults()) {
+  const normalized = normalizePermissionPreference(pref);
+  const config = configPermissionPreference();
+  const effective = { ...config, ...normalized };
+  const explicit = isPermissionExplicit(effective, config);
+  const sandbox = root?.querySelector('[name="sandboxPolicy"]');
+  const approval = root?.querySelector('[name="approvalPolicy"]');
+  const network = root?.querySelector('[name="networkAccess"]');
+  const rawSandbox = root?.querySelector('[name="sandboxPolicyRaw"]');
+  const rawApproval = root?.querySelector('[name="approvalPolicyRaw"]');
+  const preset = root?.querySelector('[name="permissionPreset"]');
+  if (sandbox) sandbox.value = explicit ? normalized.sandboxPolicy : '';
+  if (approval) approval.value = explicit ? normalized.approvalPolicy : '';
+  if (rawSandbox) rawSandbox.value = effective.sandboxPolicy;
+  if (rawApproval) rawApproval.value = effective.approvalPolicy;
+  if (network) network.checked = effective.networkAccess;
+  if (preset) {
+    ensurePermissionPresetOption(preset, effective);
+    preset.value = permissionPresetId(effective);
+    preset.dataset.explicit = explicit ? '1' : '0';
+  }
+  updateSettingSource(root?.querySelector('[data-source-for="permission"]'), explicit);
+}
+
+function savePermissionDefaults(pref) {
+  localStorage.setItem(PERMISSION_DEFAULTS_KEY, JSON.stringify(normalizePermissionPreference(pref)));
+}
+
+function saveThreadPermission(threadId, pref) {
+  if (!threadId) return;
+  const current = permissionThreadPrefs();
+  current[String(threadId)] = normalizePermissionPreference(pref);
+  localStorage.setItem(PERMISSION_THREADS_KEY, JSON.stringify(current));
+}
+
+function permissionPayload(pref = permissionDefaults()) {
+  const normalized = normalizePermissionPreference(pref);
+  return {
+    sandboxPolicy: normalized.sandboxPolicy,
+    approvalPolicy: normalized.approvalPolicy,
+    networkAccess: normalized.networkAccess,
+  };
+}
+
+function bindPermissionPreferenceControls(root, threadId = '') {
+  const bindingKey = threadId || 'global';
+  root?.querySelectorAll('[name="permissionPreset"], [name="sandboxPolicyRaw"], [name="approvalPolicyRaw"], [name="networkAccess"]').forEach((control) => {
+    if (control.dataset.permissionBinding === bindingKey) return;
+    control.dataset.permissionBinding = bindingKey;
+    control.addEventListener('change', () => {
+      syncPermissionControls(root, control);
+      const pref = preferenceFromControls(root);
+      savePermissionDefaults(pref);
+      if (threadId) saveThreadPermission(threadId, pref);
+    });
+  });
+  syncPermissionControls(root);
+}
+
+function isPermissionExplicit(pref = {}, config = configPermissionPreference()) {
+  const normalized = normalizePermissionPreference(pref);
+  const base = normalizePermissionPreference(config);
+  return Boolean(
+    normalized.sandboxPolicy && normalized.sandboxPolicy !== base.sandboxPolicy ||
+    normalized.approvalPolicy && normalized.approvalPolicy !== base.approvalPolicy ||
+    Boolean(normalized.networkAccess) !== Boolean(base.networkAccess)
+  );
+}
+
+function permissionPresetId(pref = {}) {
+  const normalized = normalizePermissionPreference(pref);
+  const match = PERMISSION_PRESETS.find((preset) =>
+    preset.sandboxPolicy === normalized.sandboxPolicy &&
+    preset.approvalPolicy === normalized.approvalPolicy &&
+    Boolean(preset.networkAccess) === Boolean(normalized.networkAccess)
+  );
+  return match?.id ?? 'custom';
+}
+
+function permissionPresetLabel(pref = {}) {
+  const normalized = normalizePermissionPreference(pref);
+  const preset = PERMISSION_PRESETS.find((entry) => entry.id === permissionPresetId(normalized));
+  if (preset) return preset.label;
+  const sandbox = normalized.sandboxPolicy || 'config sandbox';
+  const approval = normalized.approvalPolicy || 'config approvals';
+  return `${sandbox} / ${approval}${normalized.networkAccess ? ' / network' : ''}`;
+}
+
+function permissionPresetById(id) {
+  return PERMISSION_PRESETS.find((preset) => preset.id === id) ?? null;
+}
+
+function ensurePermissionPresetOption(select, pref = {}) {
+  const id = permissionPresetId(pref);
+  if (id !== 'custom' || !select || [...select.options].some((option) => option.value === 'custom')) return;
+  select.insertAdjacentHTML('beforeend', `<option value="custom">${escapeHtml(permissionPresetLabel(pref))}</option>`);
+}
+
+function syncPermissionControls(root, changedControl = null) {
+  if (!root) return;
+  const preset = root.querySelector('[name="permissionPreset"]');
+  const sandbox = root.querySelector('[name="sandboxPolicy"]');
+  const approval = root.querySelector('[name="approvalPolicy"]');
+  const network = root.querySelector('[name="networkAccess"]');
+  const rawSandbox = root.querySelector('[name="sandboxPolicyRaw"]');
+  const rawApproval = root.querySelector('[name="approvalPolicyRaw"]');
+  if (!preset || !sandbox || !approval) return;
+
+  let explicit = preset.dataset.explicit === '1';
+  if (changedControl) explicit = true;
+
+  if (changedControl === preset) {
+    const selected = permissionPresetById(preset.value);
+    if (selected) {
+      if (rawSandbox) rawSandbox.value = selected.sandboxPolicy;
+      if (rawApproval) rawApproval.value = selected.approvalPolicy;
+      if (network) network.checked = selected.networkAccess;
+    }
+  } else if (changedControl === rawSandbox || changedControl === rawApproval || changedControl === network) {
+    const rawPref = normalizePermissionPreference({
+      sandboxPolicy: rawSandbox?.value || '',
+      approvalPolicy: rawApproval?.value || '',
+      networkAccess: Boolean(network?.checked),
+    });
+    ensurePermissionPresetOption(preset, rawPref);
+    preset.value = permissionPresetId(rawPref);
+  }
+
+  const current = normalizePermissionPreference({
+    sandboxPolicy: rawSandbox?.value || '',
+    approvalPolicy: rawApproval?.value || '',
+    networkAccess: Boolean(network?.checked),
+  });
+  explicit = explicit && isPermissionExplicit(current);
+  ensurePermissionPresetOption(preset, current);
+  preset.value = permissionPresetId(current);
+  preset.dataset.explicit = explicit ? '1' : '0';
+  sandbox.value = explicit ? current.sandboxPolicy : '';
+  approval.value = explicit ? current.approvalPolicy : '';
+  updateSettingSource(root.querySelector('[data-source-for="permission"]'), explicit);
+}
+
+function modelDefaults() {
+  return normalizeModelPreference(readJsonLocalStorage(MODEL_DEFAULTS_KEY, {}));
+}
+
+function modelThreadPrefs() {
+  return readJsonLocalStorage(MODEL_THREADS_KEY, {});
+}
+
+function modelForThread(threadId) {
+  const prefs = modelThreadPrefs();
+  return Object.prototype.hasOwnProperty.call(prefs, String(threadId)) ? normalizeModelPreference(prefs[String(threadId)]) : null;
+}
+
+function normalizeModelPreference(value = {}) {
+  const model = normalizeModelValue(value.model);
+  const effort = String(value.effort ?? '').trim().toLowerCase();
+  return {
+    model,
+    effort: EFFORT_OPTIONS.includes(effort) ? effort : '',
+  };
+}
+
+function configModelPreference() {
+  const fromConfig = normalizeModelPreference(appSettings.config ?? {});
+  const firstModel = modelOptions()[0]?.id || MODEL_OPTIONS[0] || '';
+  return {
+    model: fromConfig.model || firstModel,
+    effort: fromConfig.effort || effortOptionsForModel(fromConfig.model || firstModel)[0] || 'medium',
+  };
+}
+
+function effectiveModelPreference(threadId = '') {
+  const defaults = modelDefaults();
+  const thread = threadId ? modelForThread(threadId) ?? {} : {};
+  const config = configModelPreference();
+  const selectedModel = thread.model || defaults.model || config.model;
+  const selectedEffort = thread.effort || defaults.effort || config.effort;
+  const explicitModel = isModelExplicit(selectedModel, config.model);
+  const explicitEffort = isEffortExplicit(selectedEffort, config.effort);
+  return {
+    model: explicitModel ? selectedModel : config.model,
+    effort: explicitEffort ? selectedEffort : config.effort,
+    explicitModel,
+    explicitEffort,
+  };
+}
+
+function modelPreferenceFromControls(root) {
+  return normalizeModelPreference({
+    model: root?.querySelector('[name="model"]')?.value || '',
+    effort: root?.querySelector('[name="effort"]')?.value || '',
+  });
+}
+
+function applyModelPreference(root, pref = modelDefaults()) {
+  const normalized = normalizeModelPreference(pref);
+  const config = configModelPreference();
+  const effective = { ...config, ...normalized };
+  const explicitModel = isModelExplicit(effective.model, config.model);
+  const explicitEffort = isEffortExplicit(effective.effort, config.effort);
+  const model = root?.querySelector('[data-setting-kind="model"]');
+  const effort = root?.querySelector('[data-setting-kind="effort"]');
+  const modelValue = root?.querySelector('[name="model"]');
+  const effortValue = root?.querySelector('[name="effort"]');
+  if (model) {
+    renderModelOptions(model, effective.model);
+    model.value = effective.model;
+    model.dataset.explicit = explicitModel ? '1' : '0';
+  }
+  if (effort) {
+    renderEffortOptions(effort, effective.model, effective.effort);
+    effort.value = effective.effort;
+    effort.dataset.explicit = explicitEffort ? '1' : '0';
+  }
+  if (modelValue) modelValue.value = explicitModel ? normalized.model : '';
+  if (effortValue) effortValue.value = explicitEffort ? normalized.effort : '';
+  updateSettingSource(root?.querySelector('[data-source-for="model"]'), explicitModel);
+  updateSettingSource(root?.querySelector('[data-source-for="effort"]'), explicitEffort);
+}
+
+function isModelExplicit(model, configModel = configModelPreference().model) {
+  const value = normalizeModelValue(model);
+  const base = normalizeModelValue(configModel);
+  return Boolean(value && value !== base);
+}
+
+function isEffortExplicit(effort, configEffort = configModelPreference().effort) {
+  const value = effortFromValue(effort);
+  const base = effortFromValue(configEffort);
+  return Boolean(value && value !== base);
+}
+
+function saveModelDefaults(pref) {
+  localStorage.setItem(MODEL_DEFAULTS_KEY, JSON.stringify(normalizeModelPreference(pref)));
+}
+
+function saveThreadModel(threadId, pref) {
+  if (!threadId) return;
+  const current = modelThreadPrefs();
+  current[String(threadId)] = normalizeModelPreference(pref);
+  localStorage.setItem(MODEL_THREADS_KEY, JSON.stringify(current));
+}
+
+function modelPayload(pref = modelDefaults()) {
+  const normalized = normalizeModelPreference(pref);
+  return {
+    model: normalized.model,
+    effort: normalized.effort,
+  };
+}
+
+function bindModelPreferenceControls(root, threadId = '') {
+  const bindingKey = threadId || 'global';
+  root?.querySelectorAll('[data-setting-kind="model"], [data-setting-kind="effort"]').forEach((control) => {
+    if (control.dataset.modelBinding === bindingKey) return;
+    control.dataset.modelBinding = bindingKey;
+    control.addEventListener('change', () => {
+      syncModelControls(root, control);
+      const pref = modelPreferenceFromControls(root);
+      saveModelDefaults(pref);
+      if (threadId) saveThreadModel(threadId, pref);
+    });
+  });
+  syncModelControls(root);
+}
+
+function ensureModelOption(select, model) {
+  if (!select || !model || [...select.options].some((option) => option.value === model)) return;
+  select.insertAdjacentHTML('beforeend', `<option value="${escapeAttribute(model)}">${escapeHtml(model)}</option>`);
+}
+
+function modelOptions() {
+  const fromServer = (appSettings.models ?? []).map((model) => ({
+    id: normalizeModelValue(model.id ?? model.model),
+    label: model.displayName && model.displayName !== (model.id ?? model.model) ? `${model.displayName} (${model.id ?? model.model})` : (model.id ?? model.model),
+    defaultReasoningEffort: effortFromValue(model.defaultReasoningEffort),
+    supportedReasoningEfforts: (model.supportedReasoningEfforts ?? []).map(effortFromValue).filter(Boolean),
+  })).filter((model) => model.id);
+  const fallback = MODEL_OPTIONS.map((model) => ({ id: model, label: model, defaultReasoningEffort: '', supportedReasoningEfforts: EFFORT_OPTIONS }));
+  const seen = new Set();
+  return [...fromServer, ...fallback].filter((model) => {
+    if (seen.has(model.id)) return false;
+    seen.add(model.id);
+    return true;
+  });
+}
+
+function effortOptionsForModel(model) {
+  const found = modelOptions().find((entry) => entry.id === model);
+  const efforts = found?.supportedReasoningEfforts?.length ? found.supportedReasoningEfforts : EFFORT_OPTIONS;
+  return efforts.filter((effort) => EFFORT_OPTIONS.includes(effort));
+}
+
+function renderModelOptions(select, selected = '') {
+  if (!select) return;
+  const options = modelOptions();
+  select.innerHTML = options.map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selected ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('');
+  ensureModelOption(select, selected);
+}
+
+function renderEffortOptions(select, model, selected = '') {
+  if (!select) return;
+  const efforts = [...new Set([...effortOptionsForModel(model), selected].filter(Boolean))];
+  select.innerHTML = efforts.map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selected ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('');
+}
+
+function syncModelControls(root, changedControl = null) {
+  if (!root) return;
+  const model = root.querySelector('[data-setting-kind="model"]');
+  const effort = root.querySelector('[data-setting-kind="effort"]');
+  const modelValue = root.querySelector('[name="model"]');
+  const effortValue = root.querySelector('[name="effort"]');
+  if (!model || !effort || !modelValue || !effortValue) return;
+  if (changedControl === model) {
+    model.dataset.explicit = '1';
+    if (effort.dataset.explicit !== '1') {
+      const options = effortOptionsForModel(model.value);
+      const defaultEffort = modelOptions().find((entry) => entry.id === model.value)?.defaultReasoningEffort || options[0] || effort.value;
+      renderEffortOptions(effort, model.value, defaultEffort);
+      effort.value = defaultEffort;
+    } else {
+      renderEffortOptions(effort, model.value, effort.value);
+    }
+  }
+  if (changedControl === effort) effort.dataset.explicit = '1';
+  const config = configModelPreference();
+  const explicitModel = model.dataset.explicit === '1' && isModelExplicit(model.value, config.model);
+  const explicitEffort = effort.dataset.explicit === '1' && isEffortExplicit(effort.value, config.effort);
+  model.dataset.explicit = explicitModel ? '1' : '0';
+  effort.dataset.explicit = explicitEffort ? '1' : '0';
+  modelValue.value = explicitModel ? model.value : '';
+  effortValue.value = explicitEffort ? effort.value : '';
+  updateSettingSource(root.querySelector('[data-source-for="model"]'), explicitModel);
+  updateSettingSource(root.querySelector('[data-source-for="effort"]'), explicitEffort);
+}
+
+function updateSettingSource(dot, explicit) {
+  if (!dot) return;
+  dot.classList.toggle('explicit', Boolean(explicit));
+  dot.classList.toggle('inherited', !explicit);
+  dot.title = explicit ? 'Explicit override' : 'Using config value';
+}
+
+function normalizeRepoInput(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (!/^(https?:\/\/|git@|ssh:\/\/)/i.test(text) && /^[^\s/]+\/[^\s/]+$/.test(text) && !text.includes(':')) return `git@github.com:${text.replace(/\.git$/, '')}.git`;
+  return text;
+}
+
+function openAddRepoDialog() {
+  addRepoForm.reset();
+  repoError.textContent = '';
+  repoDisplayPreview.textContent = '-';
+  repoValuePreview.textContent = '-';
+  confirmAddRepo.disabled = true;
+  addRepoDialog.showModal();
+  repoUrlInput.focus();
+}
+
+function bindBackdropClose(dialog) {
+  dialog?.addEventListener('click', (event) => {
+    const card = dialog.querySelector('.modal-card');
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    const outside =
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom;
+    if (outside) dialog.close();
+  });
+}
+
+function updateRepoPreview() {
+  const repo = normalizeRepoInput(repoUrlInput.value);
+  repoError.textContent = '';
+  repoDisplayPreview.textContent = repo ? displayRepo(repo) : '-';
+  repoValuePreview.textContent = repo || '-';
+  confirmAddRepo.disabled = !repo;
+}
+
+async function addRepository(event) {
+  event.preventDefault();
+  const repo = normalizeRepoInput(repoUrlInput.value);
+  if (!repo) return;
+  saveCustomRepos([...customRepos(), repo]);
+  updateRepoOptions([]);
+  repoFilter.value = repo;
+  newRepoSelect.value = repo;
+  saveSelectedRepo(repo);
+  addRepoDialog.close();
+  await loadNewSessionWorktrees();
+  await loadSessions();
+}
+
 
 function paramsFromForm() {
   const data = new FormData(filters);
@@ -355,6 +927,18 @@ async function jsonApi(path, body) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function loadSettings() {
+  try {
+    const settings = await api('/api/settings');
+    appSettings = {
+      config: settings.config ?? {},
+      models: Array.isArray(settings.models) ? settings.models : [],
+    };
+  } catch {
+    appSettings = { config: {}, models: [] };
+  }
 }
 
 async function loadHealth() {
@@ -467,7 +1051,11 @@ async function loadSessions({ quiet = false } = {}) {
     for (const button of listEl.querySelectorAll('.session')) {
       button.addEventListener('click', () => loadDetail(button.dataset.id));
     }
-    if (!activeId && data[0]?.id) await loadDetail(data[0].id);
+    if (!activeId) {
+      const savedId = savedActiveSession();
+      const targetId = data.some((thread) => thread.id === savedId) ? savedId : data[0]?.id;
+      if (targetId) await loadDetail(targetId);
+    }
     else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeId);
   } catch (error) {
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
@@ -477,10 +1065,20 @@ async function loadSessions({ quiet = false } = {}) {
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
+  savePermissionDefaults(pref);
+  saveModelDefaults(modelPref);
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
-  if (!cwd) return window.alert('Choose a worktree first.');
-  formData.set('cwd', cwd);
+  const sessionName = newSessionNameInput.value.trim();
+  if (cwd === '__chat__') formData.delete('cwd');
+  else {
+    if (!cwd) return window.alert('Choose a worktree first, or choose chat-only.');
+    const selected = newSessionWorktrees.find((item) => item.path === cwd);
+    if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
+    formData.set('cwd', cwd);
+  }
 
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
@@ -491,6 +1089,9 @@ async function startSessionFromSelectedWorktree(event) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
+    if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
+    if (data.thread?.id) saveThreadModel(data.thread.id, modelPref);
+    if (data.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(data.thread.id)}/name`, { name: sessionName });
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
@@ -503,20 +1104,94 @@ async function startSessionFromSelectedWorktree(event) {
   }
 }
 
-async function createFeatureWorktree() {
-  const sourcePath = newWorktreeSelect.value;
+let currentWorktreePlan = null;
+let planTimer = null;
+
+function openCreateWorktreeDialog() {
+  const sourcePath = selectedWorktreeSourcePath();
   if (!sourcePath) return window.alert('Choose a source worktree first.');
-  const branch = window.prompt('New lowercase hyphenated branch/worktree name:');
-  if (!branch) return;
+  currentWorktreePlan = null;
+  createWorktreeForm.reset();
+  worktreeNameInput.value = newSessionNameInput.value.trim();
+  planSource.textContent = compactPath(sourcePath);
+  planBranch.textContent = '-';
+  planWorktree.textContent = '-';
+  planCommand.textContent = 'Enter a lane name to preview the command.';
+  planError.textContent = '';
+  confirmCreateWorktree.disabled = true;
+  createWorktreeDialog.showModal();
+  if (worktreeNameInput.value.trim()) updateWorktreePlan();
+  worktreeNameInput.focus();
+}
+
+function scheduleWorktreePlan() {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(updateWorktreePlan, 180);
+}
+
+async function updateWorktreePlan() {
+  const sourcePath = selectedWorktreeSourcePath();
+  const branch = worktreeNameInput.value.trim();
+  const targetRoot = worktreeRootInput.value.trim();
+  currentWorktreePlan = null;
+  planError.textContent = '';
+  confirmCreateWorktree.disabled = true;
+  if (!sourcePath || !branch) {
+    planBranch.textContent = '-';
+    planWorktree.textContent = '-';
+    planCommand.textContent = 'Enter a lane name to preview the command.';
+    return;
+  }
   try {
-    const plan = await jsonApi('/api/worktree-plan', { sourcePath, branch });
-    const ok = window.confirm(`Create this worktree?\n\n${plan.commands.map((command) => command.display).join('\n')}`);
-    if (!ok) return;
-    const created = await jsonApi('/api/worktrees', { sourcePath, branch, confirmed: true });
-    await loadNewSessionWorktrees(created.worktree?.path || created.targetPath);
+    const plan = await jsonApi('/api/worktree-plan', { sourcePath, branch, targetRoot });
+    currentWorktreePlan = plan;
+    planSource.textContent = compactPath(plan.sourcePath);
+    planBranch.textContent = plan.branch;
+    planWorktree.textContent = plan.targetPath;
+    planCommand.textContent = plan.commands.map((command) => command.display).join('\n');
+    confirmCreateWorktree.disabled = false;
+  } catch (error) {
+    planBranch.textContent = '-';
+    planWorktree.textContent = '-';
+    planCommand.textContent = 'Cannot create a command preview.';
+    planError.textContent = error.message;
+  }
+}
+
+async function createFeatureWorktree(event) {
+  event?.preventDefault();
+  if (!currentWorktreePlan) await updateWorktreePlan();
+  if (!currentWorktreePlan) return;
+  confirmCreateWorktree.disabled = true;
+  confirmCreateWorktree.textContent = 'Creating...';
+  try {
+    const sessionName = currentWorktreePlan.branch || worktreeNameInput.value.trim();
+    const created = await jsonApi('/api/worktrees', {
+      sourcePath: currentWorktreePlan.sourcePath,
+      branch: currentWorktreePlan.branch,
+      targetRoot: currentWorktreePlan.targetRoot,
+      confirmed: true,
+    });
+    const createdPath = created.worktree?.path || created.targetPath;
+    createWorktreeDialog.close();
+    await loadNewSessionWorktrees(createdPath);
+    newWorktreeSelect.value = createdPath;
+    newSessionDialog.close();
+    const pref = preferenceFromControls(newSessionForm);
+    const modelPref = modelPreferenceFromControls(newSessionForm);
+    savePermissionDefaults(pref);
+    saveModelDefaults(modelPref);
+    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(modelPref) });
+    if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
+    if (started.thread?.id) saveThreadModel(started.thread.id, modelPref);
+    if (started.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(started.thread.id)}/name`, { name: sessionName });
+    if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
-    window.alert(error.message);
+    planError.textContent = error.message;
+  } finally {
+    confirmCreateWorktree.disabled = false;
+    confirmCreateWorktree.textContent = 'Create worktree';
   }
 }
 
@@ -555,16 +1230,21 @@ function syncNewSessionRepoOptions() {
 async function openNewSessionDialog() {
   syncNewSessionRepoOptions();
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
+  applyPermissionPreference(newSessionForm, permissionDefaults());
+  applyModelPreference(newSessionForm, modelDefaults());
   newSessionDialog.showModal();
   await loadNewSessionWorktrees();
 }
 
 async function loadNewSessionWorktrees(preferredPath = '') {
   const repo = newRepoSelect.value.trim();
+  const startButton = newSessionForm.querySelector('button[type="submit"]');
+  newSessionWorktrees = [];
   newWorktreeSelect.innerHTML = '';
   newWorktreeHint.textContent = '';
   createWorktreeButton.disabled = true;
   createWorktreeButton.title = 'Choose a source worktree first.';
+  if (startButton) startButton.disabled = true;
   if (!repo) {
     newWorktreeHint.textContent = 'Choose a repo first.';
     return;
@@ -574,24 +1254,82 @@ async function loadNewSessionWorktrees(preferredPath = '') {
     newWorktreeSelect.innerHTML = '<option value="">Loading worktrees...</option>';
     const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
     const worktrees = (data.worktrees ?? []).filter((item) => !item.bare);
+    newSessionWorktrees = worktrees;
     if (!worktrees.length) {
       newWorktreeSelect.innerHTML = '<option value="">No local worktrees found</option>';
       newWorktreeHint.textContent = 'No known local worktree yet. Open an existing Codex session for this repo first, or add the repo from a known lane.';
       return;
     }
 
+    const chatOption = '<option value="__chat__">No worktree - chat only</option>';
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
-      return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(abbreviatePath(item.path))}</option>`;
-    }).join('');
-    if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
+      const attached = Boolean(item.session);
+      const sessionName = item.session?.name || item.session?.id || 'session';
+      const suffix = attached ? ` — has session: ${sessionName}` : '';
+      return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} — ${escapeHtml(abbreviatePath(item.path))}${escapeHtml(suffix)}</option>`;
+    }).join('') + chatOption;
+    const available = worktrees.filter((item) => !item.session);
+    if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath && !option.disabled)) newWorktreeSelect.value = preferredPath;
+    else {
+      const suggested = suggestedWorktreeForSessionName();
+      if (suggested) newWorktreeSelect.value = suggested.path;
+      else if (available[0]) newWorktreeSelect.value = available[0].path;
+      else newWorktreeSelect.value = '__chat__';
+    }
     createWorktreeButton.disabled = false;
-    createWorktreeButton.title = '';
-    newWorktreeHint.textContent = `${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} available.`;
+    createWorktreeButton.title = 'Create a new worktree from this repo.';
+    updateNewSessionStartState();
+    newWorktreeHint.textContent = available.length
+      ? `${available.length} of ${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} can start a new session. Attached worktrees are disabled.`
+      : `All ${worktrees.length} known worktree${worktrees.length === 1 ? '' : 's'} already have sessions. Create a new worktree to start another session.`;
   } catch (error) {
     newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';
     newWorktreeHint.textContent = error.message;
   }
+}
+
+function selectedWorktreeSourcePath() {
+  return newWorktreeSelect.value === '__chat__' ? (newSessionWorktrees.find((item) => item.path)?.path || '') : (newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '');
+}
+
+function updateNewSessionStartState() {
+  const startButton = newSessionForm.querySelector('button[type="submit"]');
+  if (!startButton) return;
+  if (newWorktreeSelect.value === '__chat__') {
+    startButton.disabled = false;
+    startButton.title = '';
+    newWorktreeHint.textContent = 'This will start a chat-only Codex session without a repository worktree.';
+    return;
+  }
+  const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value);
+  const canStart = Boolean(selected && !selected.session);
+  startButton.disabled = !canStart;
+  startButton.title = canStart ? '' : 'Choose a worktree without an existing session, or create a new worktree.';
+}
+
+function slugFromSessionName(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function suggestedWorktreeForSessionName() {
+  const slug = slugFromSessionName(newSessionNameInput.value);
+  if (!slug) return null;
+  return newSessionWorktrees.find((item) => !item.session && (
+    String(item.branch ?? '').toLowerCase().includes(slug) ||
+    compactPath(item.path).toLowerCase().includes(slug)
+  )) ?? null;
+}
+
+function applySessionNameWorktreeSuggestion() {
+  const suggested = suggestedWorktreeForSessionName();
+  if (suggested) {
+    newWorktreeSelect.value = suggested.path;
+    newWorktreeHint.textContent = `Selected matching worktree: ${compactPath(suggested.path)}`;
+  } else if (newSessionNameInput.value.trim()) {
+    createWorktreeButton.title = 'No matching free worktree found. Create one from this session name.';
+  }
+  updateNewSessionStartState();
 }
 
 function renderBranchGroups(sessions) {
@@ -651,10 +1389,14 @@ function refreshAgeIndicators() {
 }
 
 async function loadDetail(id, { quiet = false } = {}) {
+  if (quiet && activeId && id !== activeId) return;
+  if (!quiet) clearTimeout(detailRefreshTimer);
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
+  const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
   const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
+  const sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
   const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
   const previousForm = detailEl.querySelector('#promptForm');
   const preservePromptForm = quiet && id === previousId && previousForm;
@@ -668,6 +1410,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     direction: previousTextarea.selectionDirection,
   } : null;
   activeId = id;
+  saveActiveSession(id);
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
     detailEl.className = 'empty';
@@ -688,19 +1431,22 @@ async function loadDetail(id, { quiet = false } = {}) {
       restorePromptDraft(promptForm, draftPrompt, draftFiles);
       restorePromptFocus(promptForm, draftSelection);
     }
+    bindPermissionPreferenceControls(promptForm, id);
+    bindModelPreferenceControls(promptForm, id);
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => toggleArchiveThread(id, data.thread));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
     detailEl.querySelectorAll('[data-action=steer-turn]').forEach((button) => { button.onclick = () => steerTurn(id, button); });
     bindQueuedMessageControls(id);
     restoreOpenTurnDetails(openTurnDetails);
+    restoreSessionDetailsOpen(sessionDetailsOpen);
     bindCodeCopyControls(detailEl);
     bindSessionImageViewer(detailEl, openImageLightbox);
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
       if (!quiet || shouldContinueFollowing) scrollDetailToBottom();
-      else if (quiet && scroller) scroller.scrollTop = previousScrollTop;
+      else if (quiet && scroller) restoreScrollAnchor(scroller, scrollAnchor, previousScrollTop);
       updateJumpBottomButton(scroller);
     });
   } catch (error) {
@@ -750,8 +1496,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <summary class="session-summary">
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
-          <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
-          ${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}
         </summary>
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
@@ -764,7 +1508,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
             <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
             <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
             <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
-            <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
+            <strong>Repo</strong><span>${renderRepoLink(thread.gitInfo?.originUrl)}</span>
             <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
             <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
           </div>
@@ -778,6 +1522,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
     </div>
     <div class="detail">
       ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
+      ${renderApprovalBlockedIndicator(thread)}
       ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
@@ -790,13 +1535,22 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
           <span>+</span>
         </label>
         <span class="attachment-status" aria-live="polite"></span>
-        ${renderPermissionControls(permissionSettings)}
+        ${renderPermissionControls(effectivePermissionPreference(thread.id, permissionSettings))}
         <span class="prompt-spacer"></span>
+        ${renderModelControls(effectiveModelPreference(thread.id), 'prompt-model-controls')}
         ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
       <div class="attachment-preview" aria-live="polite"></div>
     </form>
+  </div>`;
+}
+
+function renderApprovalBlockedIndicator(thread) {
+  if (statusClass(thread) !== 'waitingonapproval') return '';
+  return `<div class="blocked-indicator">
+    <strong>Approval required</strong>
+    <span>Codex Control cannot answer approval prompts yet. Use never approve, or continue this session in Codex app/CLI.</span>
   </div>`;
 }
 
@@ -808,26 +1562,57 @@ function checkedAttribute(value) {
   return value ? ' checked' : '';
 }
 
+function renderModelControls(settings = {}, extraClass = '') {
+  const normalized = normalizeModelPreference(settings);
+  const selectedModel = normalized.model || configModelPreference().model;
+  const selectedEffort = normalized.effort || configModelPreference().effort;
+  const explicitModel = Boolean(settings.explicitModel);
+  const explicitEffort = Boolean(settings.explicitEffort);
+  return `<div class="model-controls ${escapeHtml(extraClass)}" title="Applies to the next normal turn. Steer cannot change model or thinking.">
+    <span class="setting-source ${explicitModel ? 'explicit' : 'inherited'}" data-source-for="model" title="${explicitModel ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select data-setting-kind="model" aria-label="Model" data-explicit="${explicitModel ? '1' : '0'}">
+      ${modelOptions().map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('')}
+    </select>
+    <input type="hidden" name="model" value="${explicitModel ? escapeAttribute(selectedModel) : ''}">
+    <span class="setting-source ${explicitEffort ? 'explicit' : 'inherited'}" data-source-for="effort" title="${explicitEffort ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="${explicitEffort ? '1' : '0'}">
+      ${[...new Set([...effortOptionsForModel(selectedModel), selectedEffort].filter(Boolean))].map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selectedEffort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
+    </select>
+    <input type="hidden" name="effort" value="${explicitEffort ? escapeAttribute(selectedEffort) : ''}">
+  </div>`;
+}
+
 function renderPermissionControls(settings = {}) {
-  const sandbox = settings.sandboxPolicy?.type || '';
-  const approval = settings.approvalPolicy || '';
-  const network = Boolean(settings.sandboxPolicy?.networkAccess);
+  const normalized = normalizePermissionPreference(settings);
+  const sandbox = normalized.sandboxPolicy || configPermissionPreference().sandboxPolicy;
+  const approval = normalized.approvalPolicy || configPermissionPreference().approvalPolicy;
+  const network = normalized.networkAccess;
+  const explicit = Boolean(settings.explicit);
+  const presetId = permissionPresetId({ sandboxPolicy: sandbox, approvalPolicy: approval, networkAccess: network });
   return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
-    <select name="sandboxPolicy" aria-label="Sandbox policy">
-      <option value=""${selectedAttribute(sandbox, '')}>config sandbox</option>
-      <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
-      <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
-      <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+    <span class="setting-source ${explicit ? 'explicit' : 'inherited'}" data-source-for="permission" title="${explicit ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
+    <select name="permissionPreset" aria-label="Permission preset" data-explicit="${explicit ? '1' : '0'}">
+      ${PERMISSION_PRESETS.map((preset) => `<option value="${escapeAttribute(preset.id)}"${preset.id === presetId ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
+      ${presetId === 'custom' ? `<option value="custom" selected>${escapeHtml(permissionPresetLabel({ sandboxPolicy: sandbox, approvalPolicy: approval, networkAccess: network }))}</option>` : ''}
     </select>
-    <select name="approvalPolicy" aria-label="Approval policy">
-      <option value=""${selectedAttribute(approval, '')}>config approvals</option>
-      <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
-      <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
-      <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
-      <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
-      <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
-    </select>
+    <input type="hidden" name="sandboxPolicy" value="${explicit ? escapeAttribute(normalized.sandboxPolicy) : ''}">
+    <input type="hidden" name="approvalPolicy" value="${explicit ? escapeAttribute(normalized.approvalPolicy) : ''}">
     <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"${checkedAttribute(network)}> network</label>
+    <details class="permission-advanced">
+      <summary>Advanced</summary>
+      <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
+        <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
+        <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
+        <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+      </select>
+      <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
+        <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
+        <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
+        <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
+        <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
+        <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
+      </select>
+    </details>
   </div>`;
 }
 
@@ -935,6 +1720,7 @@ async function toggleArchiveThread(id, thread = {}) {
   if (!ok) return;
   await jsonApi(`/api/threads/${encodeURIComponent(id)}/archive`, {});
   activeId = null;
+  saveActiveSession('');
   detailEl.className = 'detail empty';
   detailEl.textContent = 'Session archived.';
   scheduleLoadSessions();
@@ -942,6 +1728,12 @@ async function toggleArchiveThread(id, thread = {}) {
 
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   const form = detailEl.querySelector('#promptForm');
+  const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
+  savePermissionDefaults(pref);
+  saveThreadPermission(id, pref);
+  saveModelDefaults(modelPref);
+  saveThreadModel(id, modelPref);
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -991,6 +1783,12 @@ async function submitPrompt(event, id) {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
+  const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
+  savePermissionDefaults(pref);
+  saveThreadPermission(id, pref);
+  saveModelDefaults(modelPref);
+  saveThreadModel(id, modelPref);
   const formData = new FormData(form);
   const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
@@ -1463,11 +2261,29 @@ repoFilter.addEventListener('change', () => {
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
+bindPermissionPreferenceControls(newSessionForm);
+bindModelPreferenceControls(newSessionForm);
+bindBackdropClose(newSessionDialog);
+bindBackdropClose(addRepoDialog);
+bindBackdropClose(createWorktreeDialog);
+bindBackdropClose(runtimeDialog);
+addRepoButton.addEventListener('click', openAddRepoDialog);
+addRepoForm.addEventListener('submit', addRepository);
+repoUrlInput.addEventListener('input', updateRepoPreview);
+closeAddRepo.addEventListener('click', () => addRepoDialog.close());
+cancelAddRepo.addEventListener('click', () => addRepoDialog.close());
 runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
+newSessionNameInput.addEventListener('input', applySessionNameWorktreeSuggestion);
+newWorktreeSelect.addEventListener('change', updateNewSessionStartState);
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
-createWorktreeButton.addEventListener('click', createFeatureWorktree);
+createWorktreeButton.addEventListener('click', openCreateWorktreeDialog);
+createWorktreeForm.addEventListener('submit', createFeatureWorktree);
+worktreeNameInput.addEventListener('input', scheduleWorktreePlan);
+worktreeRootInput.addEventListener('input', scheduleWorktreePlan);
+closeCreateWorktree.addEventListener('click', () => createWorktreeDialog.close());
+cancelCreateWorktree.addEventListener('click', () => createWorktreeDialog.close());
 closeNewSession.addEventListener('click', () => newSessionDialog.close());
 cancelNewSession.addEventListener('click', () => newSessionDialog.close());
 collapseSidebar.addEventListener('click', () => setSidebarCollapsed(true));
@@ -1491,4 +2307,5 @@ bindImageLightbox();
 connectEvents();
 setInterval(refreshAgeIndicators, 30 * 1000);
 await loadHealth();
+await loadSettings();
 await loadSessions();

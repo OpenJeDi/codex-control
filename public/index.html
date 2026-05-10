@@ -17,8 +17,7 @@
         <div class="sidebar-actions">
           <button id="collapseSidebar" type="button" title="Hide sessions">◀</button>
           <strong>Sessions</strong>
-          <button id="runtimeButton" type="button">Runtime</button>
-          <button id="newSessionButton" class="sidebar-primary" type="button">New</button>
+          <button id="newSessionButton" class="sidebar-primary icon-button compact-icon" type="button" title="New session" aria-label="New session">+</button>
         </div>
 
         <form id="filters" class="filters">
@@ -52,6 +51,9 @@
           </div>
         </form>
         <div id="sessionList" class="session-list"></div>
+        <div class="sidebar-footer">
+          <button id="runtimeButton" class="icon-button compact-icon" type="button" title="Runtime access" aria-label="Runtime access">⚙</button>
+        </div>
       </div>
     </section>
 
@@ -67,43 +69,87 @@
       <div class="modal-head">
         <div>
           <strong>New session</strong>
-          <p>Choose an existing worktree, or create one first.</p>
+          <p>Create a Codex session. Attach it to a worktree for repo work, or leave it unattached for a chat-only lane.</p>
         </div>
         <button id="closeNewSession" type="button" title="Close">×</button>
       </div>
 
       <label>
+        Session name
+        <input id="newSessionNameInput" name="sessionName" type="text" placeholder="plan total destruction updates" autocomplete="off">
+      </label>
+
+      <div class="modal-section-label">Workflow placement</div>
+
+      <label>
         Repo
-        <select id="newRepoSelect" name="repo"></select>
+        <div class="combo-action-row">
+          <select id="newRepoSelect" name="repo"></select>
+          <button id="addRepoButton" class="icon-button" type="button" title="Add repository">+</button>
+        </div>
       </label>
 
       <label>
         Worktree
-        <select id="newWorktreeSelect" name="cwd"></select>
+        <div class="combo-action-row">
+          <select id="newWorktreeSelect" name="cwd"></select>
+          <button id="createWorktreeButton" class="icon-button" type="button" title="Create worktree">+</button>
+        </div>
       </label>
       <div id="newWorktreeHint" class="hint"></div>
 
-      <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session.">
-        <select name="sandboxPolicy" aria-label="Sandbox policy">
-          <option value="">config sandbox</option>
-          <option value="readOnly">read only</option>
-          <option value="workspaceWrite">workspace write</option>
-          <option value="dangerFullAccess">danger full access</option>
+      <div class="model-controls modal-model-controls" title="Applies to the first normal turn in this session and is remembered locally.">
+        <span class="setting-source inherited" data-source-for="model" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="model" aria-label="Model" data-explicit="0">
+          <option value="gpt-5.5">gpt-5.5</option>
+          <option value="gpt-5.4">gpt-5.4</option>
+          <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+          <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+          <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+          <option value="gpt-5.2">gpt-5.2</option>
         </select>
-        <select name="approvalPolicy" aria-label="Approval policy">
-          <option value="">config approvals</option>
-          <option value="untrusted">untrusted only</option>
-          <option value="on-failure">on failure</option>
-          <option value="on-request">on request</option>
-          <option value="granular">granular</option>
-          <option value="never">never approve</option>
+        <input type="hidden" name="model" value="">
+        <span class="setting-source inherited" data-source-for="effort" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="0">
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
         </select>
+        <input type="hidden" name="effort" value="">
+      </div>
+
+      <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session and is remembered locally.">
+        <span class="setting-source inherited" data-source-for="permission" title="Using config value" aria-hidden="true"></span>
+        <select name="permissionPreset" aria-label="Permission preset" data-explicit="0">
+          <option value="review">review only</option>
+          <option value="normal">normal coding</option>
+          <option value="trusted">trusted local</option>
+          <option value="full">full autonomous</option>
+        </select>
+        <input type="hidden" name="sandboxPolicy" value="">
+        <input type="hidden" name="approvalPolicy" value="">
         <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"> network</label>
+        <details class="permission-advanced">
+          <summary>Advanced</summary>
+          <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
+            <option value="readOnly">read only</option>
+            <option value="workspaceWrite">workspace write</option>
+            <option value="dangerFullAccess">danger full access</option>
+          </select>
+          <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
+            <option value="untrusted">untrusted only</option>
+            <option value="on-failure">on failure</option>
+            <option value="on-request">on request</option>
+            <option value="granular">granular</option>
+            <option value="never">never approve</option>
+          </select>
+        </details>
       </div>
 
       <label>
         First prompt <span class="muted">optional</span>
-        <textarea name="prompt" rows="4" placeholder="Start this lane with..."></textarea>
+        <textarea name="prompt" rows="4" placeholder="Start this session with..."></textarea>
       </label>
 
       <label>
@@ -112,10 +158,83 @@
       </label>
 
       <div class="modal-actions">
-        <button id="createWorktreeButton" type="button">Create worktree…</button>
-        <span></span>
+        <span class="modal-spacer"></span>
         <button id="cancelNewSession" type="button">Cancel</button>
         <button type="submit">Start session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="addRepoDialog" class="modal">
+    <form id="addRepoForm" class="modal-card" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>Add repository</strong>
+          <p>Add a repository URL or owner/name. Codex Control will use it for session and worktree discovery.</p>
+        </div>
+        <button id="closeAddRepo" type="button" title="Close">×</button>
+      </div>
+
+      <label>
+        Repository
+        <input id="repoUrlInput" name="repo" type="text" placeholder="OpenJeDi/codex-control" autocomplete="off">
+      </label>
+      <p class="hint">For now this only adds the repo to this browser's picker. Create or clone the repository and its worktree structure yourself first; Codex Control will discover matching local worktrees from existing sessions or known lanes.</p>
+
+      <div class="plan-summary">
+        <div><strong>Display</strong><span id="repoDisplayPreview">-</span></div>
+        <div><strong>Resolved Git URL</strong><span id="repoValuePreview">-</span></div>
+      </div>
+
+      <div id="repoError" class="hint error-text"></div>
+
+      <div class="modal-actions">
+        <span class="modal-spacer"></span>
+        <button id="cancelAddRepo" type="button">Cancel</button>
+        <button id="confirmAddRepo" type="submit" disabled>Add repository</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="createWorktreeDialog" class="modal">
+    <form id="createWorktreeForm" class="modal-card" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>Create worktree</strong>
+          <p>Enter a lane name. Codex Control derives the branch and worktree from the current workflow rules.</p>
+        </div>
+        <button id="closeCreateWorktree" type="button" title="Close">×</button>
+      </div>
+
+      <label>
+        Lane name
+        <input id="worktreeNameInput" name="laneName" type="text" placeholder="modular transcript block parsers" autocomplete="off">
+      </label>
+
+      <div class="plan-summary">
+        <div><strong>Source</strong><span id="planSource">-</span></div>
+        <div><strong>Branch</strong><span id="planBranch">-</span></div>
+        <div><strong>Worktree</strong><span id="planWorktree">-</span></div>
+      </div>
+
+      <details class="plan-details">
+        <summary>Change defaults</summary>
+        <label>
+          Worktree root
+          <input id="worktreeRootInput" name="targetRoot" type="text" placeholder="default from source worktree">
+        </label>
+      </details>
+
+      <details class="plan-details" open>
+        <summary>Git command</summary>
+        <pre id="planCommand" class="command-preview">Enter a lane name to preview the command.</pre>
+      </details>
+
+      <div id="planError" class="hint error-text"></div>
+
+      <div class="modal-actions">
+        <span class="modal-spacer"></span>
+        <button id="cancelCreateWorktree" type="button">Cancel</button>
+        <button id="confirmCreateWorktree" type="submit" disabled>Create worktree</button>
       </div>
     </form>
   </dialog>

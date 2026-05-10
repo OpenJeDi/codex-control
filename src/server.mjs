@@ -2,8 +2,8 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, watch } from 'node:fs';
+import { mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -41,50 +41,81 @@ class CodexAppServer {
     this.eventsByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
+    this.restartInProgress = null;
+    this.isManualShutdown = false;
+    this.startInProgress = null;
     this.threadsChangedTimer = null;
     this.pendingChangedThreadIds = new Set();
     this.codexHome = null;
+    this.lastRestartAt = 0;
     this.ready = this.start();
   }
 
   start() {
-    this.proc = spawn('codex', ['app-server'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
-    });
+    if (this.startInProgress) return this.startInProgress;
+    this.startInProgress = (async () => {
+      const proc = spawn('codex', ['app-server'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      });
+      this.proc = proc;
 
-    this.proc.stderr.on('data', (chunk) => {
-      const text = String(chunk).trim();
-      if (text) console.warn('[codex]', text);
-    });
+      proc.stderr.on('data', (chunk) => {
+        const text = String(chunk).trim();
+        if (text) console.warn('[codex]', text);
+      });
 
-    this.proc.on('exit', (code, signal) => {
-      const err = new Error(`codex app-server exited (${code ?? signal})`);
-      for (const { reject, timer } of this.pending.values()) {
-        clearTimeout(timer);
-        reject(err);
-      }
-      this.pending.clear();
-      this.broadcast('codex-exit', { code, signal });
-      this.ready = Promise.reject(err);
-    });
+      proc.on('exit', (code, signal) => {
+        if (this.proc !== proc) return;
+        const err = new Error(`codex app-server exited (${code ?? signal})`);
+        for (const { reject, timer } of this.pending.values()) {
+          clearTimeout(timer);
+          reject(err);
+        }
+        this.pending.clear();
+        this.broadcast('codex-exit', { code, signal });
+        this.activeTurnByThread.clear();
+        if (!this.isManualShutdown) {
+          setTimeout(() => {
+            this.restartCodex().catch((error) => {
+              console.error('[codex-control] automatic codex restart failed:', error.message);
+            });
+          }, 250);
+        }
+      });
 
-    const rl = readline.createInterface({ input: this.proc.stdout });
-    rl.on('line', (line) => this.handleLine(line));
+      proc.on('error', (error) => {
+        if (this.proc !== proc) return;
+        const startupError = new Error(`codex app-server process error: ${error.message}`);
+        for (const { reject, timer } of this.pending.values()) {
+          clearTimeout(timer);
+          reject(startupError);
+        }
+        this.pending.clear();
+      });
 
-    return this.request('initialize', {
-      clientInfo: {
-        name: 'codex_control',
-        title: 'Codex Control',
-        version: '0.1.0',
-      },
-    }).then((result) => {
+      const rl = readline.createInterface({ input: proc.stdout });
+      rl.on('line', (line) => {
+        if (this.proc === proc) this.handleLine(line);
+      });
+
+      const result = await this.request('initialize', {
+        clientInfo: {
+          name: 'codex_control',
+          title: 'Codex Control',
+          version: '0.1.0',
+        },
+      }, 15000, { skipReady: true, allowRetry: false });
       this.notify('initialized', {});
       this.info = result;
       this.codexHome = result?.codexHome ?? null;
       this.watchCodexHome(result.codexHome);
       return result;
+    })().finally(() => {
+      this.startInProgress = null;
     });
+    this.ready = this.startInProgress;
+    return this.startInProgress;
   }
 
   handleLine(line) {
@@ -134,6 +165,7 @@ class CodexAppServer {
     if (!status && (lower.includes('turnstarted') || lower.includes('turn/started'))) status = { type: 'running' };
     if (!status && (lower.includes('turncompleted') || lower.includes('turn/completed'))) status = { type: 'idle' };
     if (!status && lower.includes('interrupt')) status = { type: 'idle' };
+    if (!status && lower.includes('requestapproval')) status = { type: 'waitingOnApproval' };
     if (!status && lower.includes('error')) status = { type: 'error' };
     if (!status) return;
 
@@ -149,16 +181,125 @@ class CodexAppServer {
     return external ? { ...enriched, status: external } : enriched;
   }
 
-  request(method, params = {}, timeoutMs = 15000) {
+  isProcessRunning(proc) {
+    return Boolean(proc && proc.exitCode === null && proc.signalCode === null);
+  }
+
+  waitForProcessExit(proc, timeoutMs = 800) {
+    if (!this.isProcessRunning(proc)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(resolve, timeoutMs);
+      proc.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+
+  async restartCodex() {
+    if (this.restartInProgress) return this.restartInProgress;
+    this.restartInProgress = (async () => {
+      const now = Date.now();
+      if (now - this.lastRestartAt < 250) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      this.lastRestartAt = Date.now();
+
+      if (this.isProcessRunning(this.proc)) {
+        const proc = this.proc;
+        this.isManualShutdown = true;
+        try {
+          proc.kill();
+        } catch (error) {
+          console.warn('[codex-control] failed to stop existing codex process:', error.message);
+        }
+        await this.waitForProcessExit(proc);
+        if (this.isProcessRunning(proc)) {
+          try {
+            proc.kill('SIGKILL');
+          } catch (error) {
+            console.warn('[codex-control] failed to force-stop codex process:', error.message);
+          }
+          await this.waitForProcessExit(proc);
+        }
+        this.isManualShutdown = false;
+      }
+
+      this.ready = this.start();
+      return await this.ready;
+    })();
+    this.ready = this.restartInProgress;
+
+    try {
+      await this.restartInProgress;
+    } finally {
+      this.restartInProgress = null;
+    }
+  }
+
+  isRecoverableCodexError(error) {
+    const message = String(error?.message ?? '').toLowerCase();
+    const code = String(error?.code ?? '').toLowerCase();
+    return code === 'epipe'
+      || code === 'err_stream_destroyed'
+      || message.includes('codex app-server exited')
+      || message.includes('codex app-server process error')
+      || message.includes('broken pipe')
+      || message.includes('write after end')
+      || message.includes('stream has been destroyed')
+      || message.includes('cannot call write');
+  }
+
+  async request(method, params = {}, timeoutMs = 15000, options = {}) {
+    const { allowRetry = true, skipReady = false } = options;
+    if (!skipReady) {
+      try {
+        await this.ready;
+      } catch (error) {
+        if (!allowRetry || !this.isRecoverableCodexError(error)) throw error;
+        await this.restartCodex();
+        return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
+      }
+    }
+
     const id = this.nextId++;
     const payload = { id, method, params };
-    this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
-    return new Promise((resolve, reject) => {
+    const requestPromise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
+    });
+
+    try {
+      if (!this.proc?.stdin?.writable || this.proc.stdin.destroyed) {
+        throw new Error('codex app-server stdin is not writable');
+      }
+      this.proc.stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+        if (!error || !this.pending.has(id)) return;
+        const pending = this.pending.get(id);
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        pending.reject(error);
+      });
+    } catch (error) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+      }
+      if (!allowRetry || !this.isRecoverableCodexError(error)) throw error;
+      await this.restartCodex();
+      return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
+    }
+
+    return requestPromise.catch(async (error) => {
+      if (!allowRetry || !this.isRecoverableCodexError(error)) {
+        throw error;
+      }
+      await this.restartCodex();
+      return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
     });
   }
 
@@ -179,7 +320,7 @@ class CodexAppServer {
       if (String(searchTerm ?? '').trim()) params.searchTerm = String(searchTerm).trim();
       if (String(cwd ?? '').trim()) params.cwd = String(cwd).trim();
       if (cursor) params.cursor = cursor;
-      const result = await this.request('thread/list', params);
+      const result = await this.request('thread/list', params, 15000, { allowRetry: true });
       data.push(...(result.data ?? []));
       cursor = result.nextCursor;
       if (!cursor || !(result.data ?? []).length) break;
@@ -190,10 +331,10 @@ class CodexAppServer {
 
   async readThread(threadId) {
     await this.ready;
-    const read = await this.request('thread/read', { threadId });
+    const read = await this.request('thread/read', { threadId }, 15000, { allowRetry: true });
     let turns = { data: [] };
     try {
-      turns = await this.request('thread/turns/list', { threadId });
+      turns = await this.request('thread/turns/list', { threadId }, 15000, { allowRetry: true });
     } catch (error) {
       if (!isTurnsNotReadyError(error)) throw error;
     }
@@ -241,9 +382,10 @@ class CodexAppServer {
     };
   }
 
-  async startThread(cwd, overrides = {}) {
+  async startThread(cwd = '', overrides = {}) {
     await this.ready;
-    const result = await this.request('thread/start', { cwd }, 30000);
+    const params = String(cwd ?? '').trim() ? { cwd: String(cwd).trim() } : {};
+    const result = await this.request('thread/start', params, 30000, { allowRetry: false });
     if (result.thread) {
       this.rememberStatus('thread/started', { thread: result.thread });
       this.rememberPermissionSettings(result.thread.id, overrides);
@@ -253,7 +395,7 @@ class CodexAppServer {
 
   async resumeThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/resume', { threadId }, 30000);
+    const result = await this.request('thread/resume', { threadId }, 30000, { allowRetry: false });
     if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
@@ -276,7 +418,7 @@ class CodexAppServer {
     }
 
     this.rememberPermissionSettings(threadId, overrides);
-    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000);
+    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
     if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
@@ -294,7 +436,7 @@ class CodexAppServer {
       return { threadId, status: 'idle', stale: true };
     }
     try {
-      const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000);
+      const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000, { allowRetry: false });
       const text = textFromContent(input);
       if (text) {
         const key = String(threadId);
@@ -315,7 +457,7 @@ class CodexAppServer {
 
   async setThreadName(threadId, name) {
     await this.ready;
-    const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000);
+    const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000, { allowRetry: false });
     this.rememberEvent('thread/name/set', { threadId, name });
     this.broadcast('codex-notification', { method: 'thread/name/set', params: { threadId, name } });
     this.scheduleThreadsChanged({ source: 'thread/name/set', threadId });
@@ -324,7 +466,7 @@ class CodexAppServer {
 
   async archiveThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/archive', { threadId }, 15000);
+    const result = await this.request('thread/archive', { threadId }, 15000, { allowRetry: false });
     this.rememberEvent('thread/archive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/archive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/archive', threadId });
@@ -333,7 +475,7 @@ class CodexAppServer {
 
   async unarchiveThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/unarchive', { threadId }, 15000);
+    const result = await this.request('thread/unarchive', { threadId }, 15000, { allowRetry: false });
     this.rememberEvent('thread/unarchive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/unarchive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/unarchive', threadId });
@@ -360,7 +502,7 @@ class CodexAppServer {
       return { threadId, status: 'idle', stale: true };
     }
     try {
-      const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
+      const result = await this.request('turn/interrupt', { threadId, turnId }, 15000, { allowRetry: false });
       this.activeTurnByThread.delete(String(threadId));
       this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
       this.rememberEvent('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
@@ -513,7 +655,7 @@ class CodexAppServer {
   async activeTurnId(threadId) {
     const remembered = this.activeTurnByThread.get(String(threadId));
     if (remembered) return remembered;
-    const turns = await this.request('thread/turns/list', { threadId }, 15000);
+    const turns = await this.request('thread/turns/list', { threadId }, 15000, { allowRetry: true });
     const active = (turns.data ?? []).find((turn) => isActiveTurnStatus(turn.status));
     if (active?.id) {
       this.activeTurnByThread.set(String(threadId), String(active.id));
@@ -862,7 +1004,8 @@ async function worktreesForRepo(repoUrl) {
   const repo = String(repoUrl ?? '').trim();
   if (!repo) return { repo, worktrees: [], source: 'none' };
 
-  const threads = await codex.listThreads({ includeArchived: true });
+  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  const threadsByCwd = await threadsByCwdMap(threads);
   const candidates = threads
     .filter((thread) => includes(`${thread.gitInfo?.originUrl ?? ''}\n${thread.cwd ?? ''}\n${thread.path ?? ''}`, repo))
     .map((thread) => thread.cwd)
@@ -882,13 +1025,56 @@ async function worktreesForRepo(repoUrl) {
     seen.add(key);
     try {
       const output = await execFileText('git', gitArgs(cwd, ['worktree', 'list', '--porcelain']));
-      return { repo, source: cwd, worktrees: parseWorktreeList(output) };
+      return {
+        repo,
+        source: cwd,
+        worktrees: await Promise.all(parseWorktreeList(output).map(async (worktree) => ({
+          ...worktree,
+          session: threadsByCwd.get(await pathKey(worktree.path)) ?? null,
+        }))),
+      };
     } catch {
       // Try the next known cwd.
     }
   }
 
   return { repo, worktrees: [], source: 'not-found' };
+}
+
+async function pathKey(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  try {
+    return path.normalize(await realpath(text)).toLowerCase();
+  } catch {
+    return path.normalize(text).toLowerCase();
+  }
+}
+
+async function threadsByCwdMap(threads = []) {
+  const map = new Map();
+  for (const thread of threads) {
+    const key = await pathKey(thread.cwd);
+    if (!key || map.has(key)) continue;
+    map.set(key, {
+      id: thread.id,
+      name: thread.name || '',
+      status: normalizeStatus(thread.status),
+      archived: Boolean(thread.archived || thread.isArchived || thread.archivedAt || thread.archived_at),
+      updatedAt: thread.updatedAt,
+    });
+  }
+  return map;
+}
+
+async function existingThreadForCwd(cwd) {
+  const key = await pathKey(cwd);
+  if (!key) return null;
+  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  for (const thread of threads) {
+    if (await pathKey(thread.cwd) === key) return thread;
+  }
+  return null;
 }
 
 function parseWorktreeList(output) {
@@ -1306,6 +1492,8 @@ async function readTurnPayload(req) {
     return {
       cwd: parts.find((part) => part.name === 'cwd')?.data.toString('utf8') ?? '',
       prompt: parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '',
+      model: parts.find((part) => part.name === 'model')?.data.toString('utf8') ?? '',
+      effort: parts.find((part) => part.name === 'effort')?.data.toString('utf8') ?? '',
       approvalPolicy: parts.find((part) => part.name === 'approvalPolicy')?.data.toString('utf8') ?? '',
       sandboxPolicy: parts.find((part) => part.name === 'sandboxPolicy')?.data.toString('utf8') ?? '',
       networkAccess: parts.find((part) => part.name === 'networkAccess')?.data.toString('utf8') ?? '',
@@ -1317,8 +1505,23 @@ async function readTurnPayload(req) {
   return { ...body, prompt: String(body.prompt ?? ''), files: [] };
 }
 
+function normalizeModelText(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
+  return text;
+}
+
 function turnOverridesFromPayload(payload = {}) {
   const overrides = {};
+  const model = normalizeModelText(payload.model);
+  if (model) overrides.model = model;
+
+  const effort = String(payload.effort ?? '').trim().toLowerCase();
+  if (['low', 'medium', 'high', 'xhigh'].includes(effort)) {
+    overrides.effort = effort;
+  }
+
   const approvalPolicy = String(payload.approvalPolicy ?? '').trim();
   if (['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy)) {
     overrides.approvalPolicy = approvalPolicy;
@@ -1469,6 +1672,64 @@ async function runtimeDiagnostics() {
   };
 }
 
+async function appSettings() {
+  await codex.ready;
+  const [configResult, modelResult] = await Promise.all([
+    codex.request('config/read', { includeLayers: false }).catch(() => ({})),
+    codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
+  ]);
+  const config = normalizeConfigSettings(configResult?.config ?? configResult ?? {});
+  const models = Array.isArray(modelResult?.data) ? modelResult.data.map(compactModelInfo).filter((model) => model.id) : [];
+  return { config, models };
+}
+
+function compactModelInfo(model = {}) {
+  const id = normalizeModelValue(model.id ?? model.model ?? model.name);
+  return {
+    id,
+    model: normalizeModelValue(model.model ?? id),
+    displayName: String(model.displayName ?? model.name ?? id),
+    defaultReasoningEffort: normalizeEffortValue(model.defaultReasoningEffort),
+    supportedReasoningEfforts: (model.supportedReasoningEfforts ?? [])
+      .map((entry) => normalizeEffortValue(entry?.reasoningEffort ?? entry))
+      .filter(Boolean),
+  };
+}
+
+function normalizeConfigSettings(config = {}) {
+  const model = normalizeModelValue(config.model ?? config.model_id ?? config.modelId ?? config.modelName);
+  const effort = normalizeEffortValue(config.model_reasoning_effort ?? config.modelReasoningEffort ?? config.reasoning_effort ?? config.reasoningEffort ?? config.effort);
+  return {
+    model,
+    effort,
+    sandboxPolicy: normalizeSandboxPolicyValue(config.sandbox_mode ?? config.sandboxMode ?? config.sandboxPolicy ?? config.sandbox),
+    approvalPolicy: normalizeApprovalPolicyValue(config.approval_policy ?? config.approvalPolicy ?? config.approval),
+    networkAccess: Boolean(config.sandboxPolicy?.networkAccess ?? config.sandbox?.networkAccess ?? config.networkAccess ?? config.network_access),
+  };
+}
+
+function normalizeSandboxPolicyValue(value) {
+  const raw = typeof value === 'object' ? value?.type : value;
+  const text = String(raw ?? '').trim();
+  const normalized = text.replace(/[_\s-]+/g, '').toLowerCase();
+  if (normalized === 'readonly') return 'readOnly';
+  if (normalized === 'workspacewrite') return 'workspaceWrite';
+  if (normalized === 'dangerfullaccess') return 'dangerFullAccess';
+  return '';
+}
+
+function normalizeApprovalPolicyValue(value) {
+  const text = String(value ?? '').trim();
+  const normalized = text.replace(/[_\s]+/g, '-').replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+  const aliases = {
+    onrequest: 'on-request',
+    onfailure: 'on-failure',
+    unlesstrusted: 'untrusted',
+  };
+  const candidate = aliases[normalized.replace(/-/g, '')] ?? normalized;
+  return ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(candidate) ? candidate : '';
+}
+
 function sendMediaPath(res, filePath) {
   const media = mediaFromLocalFilePath(filePath);
   if (!media) {
@@ -1535,6 +1796,21 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === '/api/settings' && req.method === 'GET') {
+      sendJson(res, 200, await appSettings());
+      return;
+    }
+
+    if (url.pathname === '/api/codex/restart' && req.method === 'POST') {
+      if (process.env.CODEX_CONTROL_DEV_RESTART !== '1') {
+        sendJson(res, 403, { error: 'Codex restart endpoint is disabled. Set CODEX_CONTROL_DEV_RESTART=1 to use it.' });
+        return;
+      }
+      await codex.restartCodex();
+      sendJson(res, 200, { ok: true, message: 'Codex app-server restart initiated.' });
+      return;
+    }
+
     if (url.pathname === '/api/media/path' && req.method === 'GET') {
       sendMediaPath(res, url.searchParams.get('path'));
       return;
@@ -1581,7 +1857,10 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/threads' && req.method === 'POST') {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
-      if (!cwd) throw new Error('Choose a worktree first.');
+      if (cwd) {
+        const existing = await existingThreadForCwd(cwd);
+        if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
+      }
       const overrides = turnOverridesFromPayload(payload);
       const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;
