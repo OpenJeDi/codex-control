@@ -1128,10 +1128,10 @@ function renderTurn(turn, index, thread) {
   const innerItems = [
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
     ...(summary.hiddenItems ?? []).map(renderItem),
-    ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
     renderTurnBreak(turn, statusValue, threadBusy),
   ].filter(Boolean);
-  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || (turn.steeredMessages?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
+  const visibleSteeredMessages = (turn.steeredMessages ?? []).map(renderSteeredMessage).join('');
+  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
   const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
   return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
     <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
@@ -1140,6 +1140,7 @@ function renderTurn(turn, index, thread) {
         <div class="item-type">Prompt</div>
         ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)') : renderMarkdownText(summary.prompt || '(no prompt text)')}
       </article>
+      ${visibleSteeredMessages}
       ${hasInnerItems ? `<details class="turn-details">
         <summary>Intermediate activity</summary>
         <div class="turn-full">${innerItems.join('')}</div>
@@ -1179,10 +1180,10 @@ function turnSummary(turn) {
 }
 
 function renderSteeredMessage(message) {
-  return `<div class="steer-note">
-    <div class="steer-title">Steered into current run</div>
+  return `<article class="steer-note">
+    <div class="item-type">Steered prompt</div>
     ${renderMarkdownText(message.text)}
-  </div>`;
+  </article>`;
 }
 
 function renderTurnBreak(turn, statusOverride = turn.status, suppressInterrupted = false) {
