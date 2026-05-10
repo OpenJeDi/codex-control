@@ -693,7 +693,7 @@ function renderTurn(turn, index) {
   const summary = turnSummary(turn);
   return `<details class="turn ${escapeHtml(status)}">
     <summary class="turn-summary">
-      <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
+      <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
       <div class="turn-compact">
         <article>
           <div class="item-type">Prompt</div>
@@ -706,6 +706,7 @@ function renderTurn(turn, index) {
       </div>
     </summary>
     <div class="turn-full">
+      <div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>
       ${turn.items.map(renderItem).join('')}
       ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
       ${renderTurnBreak(turn)}
