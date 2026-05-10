@@ -1346,6 +1346,8 @@ function refreshAgeIndicators() {
 }
 
 async function loadDetail(id, { quiet = false } = {}) {
+  if (quiet && activeId && id !== activeId) return;
+  if (!quiet) clearTimeout(detailRefreshTimer);
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
