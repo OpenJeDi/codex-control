@@ -1,3 +1,15 @@
+import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
+import {
+  bindCodeCopyControls,
+  bindSessionImageViewer,
+  createTranscriptRenderContext,
+  escapeAttribute,
+  escapeHtml,
+  renderCompactDetailsItem,
+  renderContentParts,
+  renderMarkdownText,
+} from './transcript/rendering.js';
+
 const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
@@ -73,7 +85,20 @@ const PERMISSION_PRESETS = [
 ];
 let appSettings = { config: {}, models: [], readOnly: false, fileServingMode: 'session' };
 
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const transcriptRenderContext = createTranscriptRenderContext();
+let transcriptBlockRenderer;
+let transcriptItemRenderer;
+function getTranscriptBlockRenderer() {
+  if (transcriptBlockRenderer) return transcriptBlockRenderer;
+  transcriptBlockRenderer = createTranscriptBlockRenderer(transcriptRenderContext);
+  return transcriptBlockRenderer;
+}
+function getTranscriptItemRenderer() {
+  if (transcriptItemRenderer) return transcriptItemRenderer;
+  transcriptItemRenderer = createTranscriptItemRenderer(transcriptRenderContext);
+  return transcriptItemRenderer;
+}
+
 const truncate = (value, max = 12000) => {
   const text = String(value ?? '');
   return text.length > max ? `${text.slice(0, max)}\n... truncated ...` : text;
@@ -1443,8 +1468,8 @@ async function loadDetail(id, { quiet = false } = {}) {
     bindQueuedMessageControls(id);
     restoreOpenTurnDetails(openTurnDetails);
     restoreSessionDetailsOpen(sessionDetailsOpen);
-    bindCodeCopyControls();
-    bindSessionImageViewer();
+    bindCodeCopyControls(detailEl);
+    bindSessionImageViewer(detailEl, openImageLightbox);
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -2038,6 +2063,13 @@ function itemLabel(item) {
   if (item.type === 'agentMessage') return item.phase === 'commentary' ? 'Agent note' : 'Agent response';
   if (item.type === 'commandExecution') return 'Command';
   if (item.type === 'reasoning') return 'Reasoning summary';
+  if (String(item.type).toLowerCase() === 'imagegeneration') return 'Image generation';
+  if (
+    Array.isArray(item?.renderBlocks)
+    && item.renderBlocks.some((block) => String(block?.kind || block?.type || '').toLowerCase() === 'imagegeneration')
+  ) {
+    return 'Image generation';
+  }
   if (String(item.type).toLowerCase().includes('file')) return 'File change';
   return String(item.type ?? 'Item').replace(/([a-z])([A-Z])/g, '$1 $2');
 }
@@ -2053,142 +2085,6 @@ function looksNoisy(item, body) {
 
 function hasRenderableMedia(item) {
   return Array.isArray(item.parts) && item.parts.some((part) => part.type === 'image');
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value).replace(/`/g, '&#96;');
-}
-
-function mediaKindFromSrc(src) {
-  const raw = String(src ?? '').toLowerCase();
-  if (raw.includes('kind=video')) return 'video';
-  if (raw.includes('kind=image')) return 'image';
-  const clean = raw.split('?')[0];
-  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(clean) || clean.startsWith('/api/media/')) return 'image';
-  if (/\.(mp4|webm|mov|m4v)$/.test(clean)) return 'video';
-  return 'file';
-}
-
-function renderMarkdownMedia(src, label = '', embedded = false) {
-  const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
-  const caption = escapeHtml(label || 'media');
-  const kind = mediaKindFromSrc(cleanSrc);
-  if (embedded && kind === 'image') {
-    return `<figure class="session-image"><img src="${escapeAttribute(cleanSrc)}" alt="${escapeAttribute(label || 'Session image')}" loading="lazy"><figcaption>${caption}</figcaption></figure>`;
-  }
-  if (embedded && kind === 'video') {
-    return `<figure class="session-image session-video"><video src="${escapeAttribute(cleanSrc)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
-  }
-  return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
-}
-
-function renderInlineMarkdown(text) {
-  const codeSpans = [];
-  const media = [];
-  let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
-    const token = `@@CODE${codeSpans.length}@@`;
-    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
-    return token;
-  }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
-    const token = `@@MEDIA${media.length}@@`;
-    media.push(renderMarkdownMedia(src, alt, true));
-    return token;
-  });
-  html = escapeHtml(html);
-  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
-  html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
-  return html;
-}
-
-function renderMarkdownBlocks(text) {
-  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
-  const blocks = [];
-  let paragraph = [];
-  let list = null;
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${list.type}>`);
-    list = null;
-  };
-
-  for (const line of lines) {
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length + 2;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
-      continue;
-    }
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
-    if (bullet) {
-      flushParagraph();
-      if (!list || list.type !== 'ul') list = { type: 'ul', items: [] };
-      list.items.push(bullet[1]);
-      continue;
-    }
-    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (numbered) {
-      flushParagraph();
-      if (!list || list.type !== 'ol') list = { type: 'ol', items: [] };
-      list.items.push(numbered[1]);
-      continue;
-    }
-    paragraph.push(line.trim());
-  }
-  flushParagraph();
-  flushList();
-  return blocks.join('') || '<p></p>';
-}
-
-function renderCodeBlockContent(code) {
-  return escapeHtml(code);
-}
-
-function renderMarkdownText(text) {
-  const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
-  return `<div class="markdown-body">${segments.map((segment, index) => {
-    if (index % 2 === 1) {
-      const code = segment.replace(/^\w+\n/, '');
-      return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${renderCodeBlockContent(code)}</code></pre>`;
-    }
-    return renderMarkdownBlocks(segment);
-  }).join('')}</div>`;
-}
-
-function bindCodeCopyControls() {
-  detailEl.querySelectorAll('.copy-code').forEach((button) => {
-    button.onclick = async () => {
-      const code = button.parentElement?.querySelector('code')?.textContent ?? '';
-      try {
-        await navigator.clipboard.writeText(code);
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
-      } catch {
-        window.alert('Could not copy code.');
-      }
-    };
-  });
-}
-
-function bindSessionImageViewer() {
-  detailEl.querySelectorAll('.session-image img, .queued-attachments img').forEach((image) => {
-    image.addEventListener('click', () => openImageLightbox(image.src, image.alt || 'Session image'));
-  });
 }
 
 function openImageLightbox(src, alt = '') {
@@ -2272,47 +2168,50 @@ function bindImageLightbox() {
   });
 }
 
-function shouldRenderMarkdown(item) {
-  return item.type === 'userMessage' || item.type === 'agentMessage' || item.type === 'reasoning';
-}
-
-function renderContentParts(item, fallbackBody) {
-  const renderText = (text) => shouldRenderMarkdown(item) ? renderMarkdownText(text) : `<pre>${escapeHtml(text)}</pre>`;
-  if (!Array.isArray(item.parts) || !item.parts.length) return renderText(fallbackBody);
-  return item.parts.map((part) => {
-    if (part.type === 'text') return part.text ? renderText(part.text) : '';
-    if (part.type === 'image') {
-      return `<figure class="session-image"><img src="${escapeHtml(part.src)}" alt="Attached session image" loading="lazy"><figcaption>${escapeHtml(part.contentType || 'image')}</figcaption></figure>`;
-    }
-    if (part.type === 'unsupportedImage') return '<div class="unsupported-media">Image omitted: unsupported source</div>';
-    return '';
-  }).join('');
-}
-
 function renderItem(item) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
+  const customItem = renderSingleItem(item);
+  const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
   const preview = noisy ? body.slice(0, 220).replace(/\s+/g, ' ').trim() : body;
 
-  if (noisy) {
-    return `<article class="item ${escapeHtml(item.type)} compact-item">
-      <details>
-        <summary>
-          <span>${escapeHtml(label)}</span>
-          <small>${escapeHtml(preview || 'expand details')}</small>
-        </summary>
-        <pre>${escapeHtml(body)}</pre>
-      </details>
+  if (customItem) return customItem;
+
+  if (customBlocks) {
+    return `<article class="item ${escapeHtml(item.type)}">
+      <div class="item-type">${escapeHtml(label)}</div>
+      ${customBlocks}
     </article>`;
+  }
+
+  if (noisy) {
+    return renderCompactDetailsItem({
+      type: item.type,
+      label,
+      body,
+      preview,
+    });
   }
 
   return `<article class="item ${escapeHtml(item.type)}">
     <div class="item-type">${escapeHtml(label)}</div>
     ${renderContentParts(item, body)}
   </article>`;
+}
+
+function renderItemBlocks(item) {
+  const blocks = Array.isArray(item?.renderBlocks) ? item.renderBlocks : [];
+  if (!blocks.length) return '';
+  const renderer = getTranscriptBlockRenderer();
+  return renderer(blocks);
+}
+
+function renderSingleItem(item) {
+  const parser = getTranscriptItemRenderer();
+  return parser([item]);
 }
 
 function scheduleLoadSessions() {

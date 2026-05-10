@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -7,6 +7,8 @@ import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { createTranscriptMediaHelpers } from './transcript/media.js';
+import { createTranscriptNormalizer, textFromContent, truncate } from './transcript/normalize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -21,6 +23,18 @@ const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
 const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
+const transcriptMedia = createTranscriptMediaHelpers({
+  mediaById,
+  canServeLocalFilePath,
+  localFileScope,
+  normalizeLocalFilePath,
+});
+const { mediaFromLocalFilePath } = transcriptMedia;
+const transcriptNormalizer = createTranscriptNormalizer({
+  ...transcriptMedia,
+  extractModelFromPayload,
+  extractEffortFromPayload,
+});
 
 class CodexAppServer {
   constructor() {
@@ -374,8 +388,8 @@ class CodexAppServer {
     if (resolvedThread?.cwd) this.cwdByThread.set(key, resolvedThread.cwd);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), mediaPolicy)),
-      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map((message) => compactQueuedMessage(message, mediaPolicy)),
+      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd, mediaPolicy)),
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map((message) => normalizeQueuedMessage(message, mediaPolicy)),
       permissionSettings,
       events: this.eventsByThread.get(key) ?? [],
     };
@@ -586,7 +600,7 @@ class CodexAppServer {
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
-    return removed ? compactQueuedMessage(removed, this.mediaPolicyForThreadId(threadId)) : null;
+    return removed ? normalizeQueuedMessage(removed, this.mediaPolicyForThreadId(threadId)) : null;
   }
 
   moveQueuedMessage(threadId, turnId, direction) {
@@ -594,7 +608,7 @@ class CodexAppServer {
     const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
     const index = current.findIndex((message) => String(message.turnId) === String(turnId));
     const mediaPolicy = this.mediaPolicyForThreadId(threadId);
-    if (index === -1) return current.map((message) => compactQueuedMessage(message, mediaPolicy));
+    if (index === -1) return current.map((message) => normalizeQueuedMessage(message, mediaPolicy));
     const delta = direction === 'down' ? 1 : -1;
     const target = Math.max(0, Math.min(current.length - 1, index + delta));
     if (target !== index) {
@@ -602,7 +616,7 @@ class CodexAppServer {
       current.splice(target, 0, message);
       this.queuedMessagesByThread.set(key, current);
     }
-    return current.map((message) => compactQueuedMessage(message, mediaPolicy));
+    return current.map((message) => normalizeQueuedMessage(message, mediaPolicy));
   }
 
   async steerQueuedMessage(threadId, turnId) {
@@ -1140,41 +1154,13 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = [], attachments = [], mediaPolicy = {}) {
-  return {
-    id: turn.id,
-    status: turn.status,
-    error: turn.error,
-    startedAt: turn.startedAt,
-    completedAt: turn.completedAt,
-    durationMs: turn.durationMs,
-    model: extractModelFromPayload(turn),
-    effort: extractEffortFromPayload(turn),
-    steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, mediaPolicy)), attachments),
-  };
-}
-
-function compactQueuedMessage(message, mediaPolicy = {}) {
+function normalizeQueuedMessage(message, mediaPolicy = {}) {
   return {
     turnId: message.turnId,
     text: message.text,
     attachments: attachmentsFromInput(message.input, mediaPolicy),
     createdAt: message.createdAt,
   };
-}
-
-function mergeTurnAttachments(items, attachments = []) {
-  if (!attachments.length) return items;
-  const userIndex = items.findIndex((item) => item.type === 'userMessage');
-  if (userIndex === -1) return items;
-  const next = [...items];
-  const userItem = next[userIndex];
-  const existingParts = Array.isArray(userItem.parts) ? userItem.parts : [];
-  const existingSrcs = new Set(existingParts.map((part) => part.src).filter(Boolean));
-  const attachmentParts = attachments.filter((attachment) => !existingSrcs.has(attachment.src));
-  next[userIndex] = { ...userItem, parts: [...existingParts, ...attachmentParts] };
-  return next;
 }
 
 function attachmentsFromInput(input = [], mediaPolicy = {}) {
@@ -1343,30 +1329,6 @@ function normalizeModelValue(value) {
   return text;
 }
 
-function textFromContent(content) {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((part) => part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value)
-    .map((part) => part?.text ?? part?.value ?? '')
-    .filter(Boolean)
-    .join('\n');
-}
-
-function mediaFromDataUrl(dataUrl) {
-  const match = String(dataUrl ?? '').match(/^data:([^;,]+);base64,(.+)$/s);
-  if (!match) return null;
-  const [, contentType, encoded] = match;
-  const id = createHash('sha256').update(dataUrl).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, data: Buffer.from(encoded, 'base64') });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
-}
-
-function mediaFromLocalImagePath(filePath, policy = {}) {
-  const media = mediaFromLocalFilePath(filePath, policy);
-  if (!media || !String(media.contentType).toLowerCase().startsWith('image/')) return null;
-  return { type: 'image', ...media };
-}
-
 function normalizeLocalFilePath(filePath) {
   const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
   if (!target || target.includes('\0')) return '';
@@ -1409,139 +1371,11 @@ function canServeLocalFilePath(filePath, policy = {}) {
   return Boolean(policy?.cwd && isPathInside(policy.cwd, target));
 }
 
-function localFileContentType(filePath) {
-  const ext = path.extname(String(filePath ?? '')).toLowerCase();
-  return {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.m4v': 'video/mp4',
-    '.cpp': 'text/plain; charset=utf-8',
-    '.h': 'text/plain; charset=utf-8',
-    '.hpp': 'text/plain; charset=utf-8',
-    '.cs': 'text/plain; charset=utf-8',
-    '.js': 'text/plain; charset=utf-8',
-    '.mjs': 'text/plain; charset=utf-8',
-    '.ts': 'text/plain; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.md': 'text/markdown; charset=utf-8',
-    '.txt': 'text/plain; charset=utf-8',
-    '.log': 'text/plain; charset=utf-8',
-    '.diff': 'text/plain; charset=utf-8',
-    '.patch': 'text/plain; charset=utf-8',
-    '.pdf': 'application/pdf',
-  }[ext] ?? 'application/octet-stream';
-}
-
-function mediaFromLocalFilePath(filePath, policy = {}) {
-  const target = normalizeLocalFilePath(filePath);
-  if (!canServeLocalFilePath(target, policy)) return null;
-  const contentType = localFileContentType(target);
-  const scope = fileServingMode === 'system'
-    ? 'system'
-    : (normalizeSandboxPolicyValue(policy?.sandboxPolicy) === 'dangerFullAccess' ? 'dangerFullAccess' : `workspace:${normalizeLocalFilePath(policy?.cwd)}`);
-  const id = createHash('sha256').update(`${scope}\n${target}`).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target), scope });
-  return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
-}
-
-function rewriteMarkdownLocalFileLinks(text, policy = {}) {
-  return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target, policy);
-    const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
-    return media ? `![${alt}](${media.src}?kind=${kind})` : match;
-  }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target, policy);
-    return media ? `[${label}](${media.src})` : match;
-  });
-}
-
-function rewriteLocalFileReferences(text, policy = {}) {
-  return String(text ?? '').split(/(```[\s\S]*?```)/g).map((segment) => {
-    if (segment.startsWith('```')) return segment;
-    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment, policy), policy), policy);
-  }).join('');
-}
-
-function rewriteInlineCodeLocalFileLinks(text, policy = {}) {
-  return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
-    return media ? `[${rawPath}](${media.src})` : match;
-  });
-}
-
-function resolveMentionedFilePath(rawPath, cwd = '') {
-  const cleaned = String(rawPath ?? '').trim().replace(/^[\'"`(<\[]+|[\'"`)>\].,;:]+$/g, '');
-  if (!cleaned) return '';
-  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
-  if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
-  if (!/[\\/]/.test(cleaned)) return '';
-  const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
-  return existsSync(resolved) ? resolved : '';
-}
-
-function rewriteBareLocalFilePaths(text, policy = {}) {
-  const source = String(text ?? '');
-  return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
-    return media ? `${prefix}[${rawPath}](${media.src})` : match;
-  });
-}
-
-function compactContentParts(content, mediaPolicy = {}) {
-  if (!Array.isArray(content)) return [];
-  return content.map((part) => {
-    const type = String(part?.type ?? '').toLowerCase();
-    if (type === 'text' || type === 'input_text' || part?.text || part?.value) {
-      const text = part?.text ?? part?.value ?? '';
-      return text ? { type: 'text', text: truncate(text) } : null;
-    }
-    if (type === 'image' || type === 'input_image') {
-      const media = mediaFromDataUrl(part?.url ?? part?.image_url);
-      return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
-    }
-    if (type === 'localimage' || type === 'local_image') {
-      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path, mediaPolicy);
-      return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
-    }
-    return null;
-  }).filter(Boolean);
-}
-
-function truncate(value, max = 12000) {
-  const text = String(value ?? '');
-  return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
-}
-
-function compactItem(item, mediaPolicy = {}) {
-  const type = item.type ?? 'unknown';
-  const base = { id: item.id, type };
-
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content, mediaPolicy) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, mediaPolicy)) };
-  if (type === 'commandExecution') {
-    return {
-      ...base,
-      command: item.command ?? item.cmd ?? item.argv?.join(' '),
-      status: item.status,
-      exitCode: item.exitCode,
-      output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
-    };
-  }
-  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', mediaPolicy)) };
-
-  const json = JSON.stringify(item, null, 2);
-  return { ...base, text: truncate(json, 6000) };
+function localFileScope(_filePath, policy = {}) {
+  if (fileServingMode === 'system') return 'system';
+  return normalizeSandboxPolicyValue(policy?.sandboxPolicy) === 'dangerFullAccess'
+    ? 'dangerFullAccess'
+    : `workspace:${normalizeLocalFilePath(policy?.cwd)}`;
 }
 
 function includes(haystack, needle) {
