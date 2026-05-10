@@ -54,6 +54,10 @@ const blockNormalizers = [
 
 Then add the matching browser block parser under `public/transcript/parsers/`.
 
+## Existing Parser Notes
+
+`parsers/imageGeneration.js` accepts Codex image-generation tool items and event payloads, including `imageGeneration`, `image_generation`, `image_generation_end`, data URLs, local file paths, and raw base64 image payloads such as `result` or `b64_json`. It emits an `imageGeneration` render block with browser-safe `/api/media/:id` image URLs plus truncated raw JSON for a disclosure view.
+
 ## Context Helpers
 
 Normalizer modules receive a context object with:

@@ -45,7 +45,7 @@ export function createTranscriptNormalizer(context = {}) {
 
   function normalizeTranscriptItem(item, cwd = '') {
     const type = item.type ?? 'unknown';
-    const base = { id: item.id, type };
+    const base = { id: item.id ?? item.call_id ?? item.callId, type };
     const itemContext = { ...normalizerContext, cwd };
 
     if (type === 'userMessage') {

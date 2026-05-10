@@ -153,12 +153,19 @@ function collectImageGenerationCandidates(item) {
 
 function isImageGenerationItem(item) {
   if (!item || typeof item !== 'object') return false;
-  const type = String(item.type ?? '').trim().toLowerCase();
-  const kind = String(item.kind ?? '').trim().toLowerCase();
-  const tool = String(item.tool ?? item.name ?? item.toolName ?? '').trim().toLowerCase();
-  return [type, kind, tool].includes('imagegeneration')
-    || ['image_generation', 'imagegenerate', 'imagetool'].includes(tool)
-    || type.startsWith('imagegeneration');
+  const signals = [
+    item.type,
+    item.kind,
+    item.tool,
+    item.name,
+    item.toolName,
+  ].map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean);
+  return signals.some((signal) => {
+    const compactSignal = signal.replace(/[^a-z0-9]/g, '');
+    return compactSignal === 'imagegeneration'
+      || compactSignal.startsWith('imagegeneration')
+      || ['imagegenerate', 'imagetool'].includes(compactSignal);
+  });
 }
 
 function hasImageOutput(value) {
@@ -217,9 +224,17 @@ export const imageGenerationNormalizer = {
 
     const prompt = [
       item.prompt,
+      item.revisedPrompt,
+      item.revised_prompt,
       item.input?.prompt,
+      item.input?.revisedPrompt,
+      item.input?.revised_prompt,
       item.parameters?.prompt,
+      item.parameters?.revisedPrompt,
+      item.parameters?.revised_prompt,
       item.task?.prompt,
+      item.task?.revisedPrompt,
+      item.task?.revised_prompt,
     ].filter(Boolean).map((value) => String(value).trim()).join(' | ');
 
     return [{
