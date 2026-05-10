@@ -222,7 +222,7 @@ body.sidebar-collapsed .splitter { display: none; }
   background: rgba(255,255,255,0.025);
 }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; }
-.badge { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; background: rgba(255,255,255,0.03); }
+.badge { display: inline-flex; align-items: center; min-height: 28px; border: 1px solid var(--line); border-radius: 999px; padding: 0 9px; line-height: 1; background: rgba(255,255,255,0.03); }
 .badge.model { border-color: rgba(143, 188, 143, 0.45); color: var(--accent); }
 .badge.effort { border-color: rgba(216, 181, 109, 0.42); color: var(--warn); }
 .detail { padding: 14px 18px 18px; }
@@ -445,7 +445,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   background: color-mix(in srgb, var(--panel) 97%, black);
   z-index: 4;
 }
-.session-meta { min-width: 0; }
+.session-meta { min-width: 0; align-self: center; }
 .session-summary {
   cursor: pointer;
   display: grid;
@@ -494,7 +494,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .jump-bottom:hover:not(:disabled) { border-color: var(--accent-2); }
 .jump-bottom:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
-.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-self: center; }
 .danger-button { border-color: rgba(212, 135, 135, 0.55); color: var(--danger); }
 .danger-button:hover { border-color: rgba(212, 135, 135, 0.9); background: rgba(212, 135, 135, 0.1); }
 .danger-button:disabled { opacity: 0.65; cursor: wait; }
