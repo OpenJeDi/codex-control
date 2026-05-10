@@ -111,7 +111,8 @@ button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 4px 8px;
+  min-height: 58px;
+  padding: 10px;
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 96%, black);
 }
@@ -121,7 +122,8 @@ button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
   min-width: 36px;
   height: 36px;
   padding: 0;
-  font-size: 22px;
+  font-size: 26px;
+  line-height: 1;
 }
 .splitter {
   cursor: col-resize;
