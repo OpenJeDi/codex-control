@@ -18,7 +18,7 @@ This file is for coding agents working in this repository. It is not user-facing
 
 ## Safety Expectations
 
-- Preserve `CODEX_CONTROL_READ_ONLY=1` behavior when changing routes or UI controls.
+- Preserve `CODEX_CONTROL_READ_ONLY=1` behavior when changing routes or UI controls, even though writable local mode is the default.
 - Every new mutating API route must call the server-side write-access guard.
 - Every new write control in the UI must be hidden or disabled in read-only mode.
 - Local file/media serving must follow session permission policy by default.

@@ -984,6 +984,7 @@ function renderRuntimeDiagnostics(data) {
   const access = data.access ?? {};
   const git = data.git ?? {};
   const server = data.server ?? {};
+  const auth = server.auth ?? {};
   const commands = data.commands ?? {};
   const gitStatus = String(git.status ?? '').trim();
   const canChangePermissions = Boolean(access.currentSessionCanChangePermissions);
@@ -1008,6 +1009,7 @@ function renderRuntimeDiagnostics(data) {
         <dt>Server</dt><dd>${escapeHtml(serverReadOnly ? 'read only' : 'read/write')} at ${escapeHtml(`${server.host || '127.0.0.1'}:${server.port || ''}`)}</dd>
         <dt>Server platform</dt><dd>${escapeHtml(server.platform || '-')}</dd>
         <dt>Config file</dt><dd>${escapeHtml(server.configPath || '-')}</dd>
+        <dt>Authentication</dt><dd>${escapeHtml(auth.enabled ? `basic (${auth.user || 'configured user'})` : (auth.networkWarning ? 'disabled - network exposure warning' : 'disabled'))}</dd>
         <dt>File serving</dt><dd>${escapeHtml(server.fileServingMode === 'system' ? 'system files' : 'session policy')}</dd>
         <dt>Worktree</dt><dd>${escapeHtml(git.worktreeRoot || '-')}</dd>
         <dt>Worktree config</dt><dd>${escapeHtml(data.config?.defaultWorktreeWorkflow || 'auto-sibling')}${data.config?.warnings?.length ? ' (warnings)' : ''}</dd>
