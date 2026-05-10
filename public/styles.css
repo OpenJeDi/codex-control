@@ -689,3 +689,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   background: rgba(0,0,0,0.2);
 }
 .runtime-copy { padding: 4px 8px; font-size: 12px; }
+.combo-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.icon-button { width: 44px; min-width: 44px; font-size: 20px; line-height: 1; padding: 9px 0; }
+.plan-summary { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.025); }
+.plan-summary div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; align-items: start; }
+.plan-summary strong { color: var(--text); font-weight: 700; }
+.plan-summary span { color: var(--muted); overflow-wrap: anywhere; }
+.plan-details { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: rgba(255,255,255,0.018); }
+.plan-details summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+.command-preview { margin-top: 10px; color: var(--text); }
+.error-text { color: var(--danger); min-height: 18px; }

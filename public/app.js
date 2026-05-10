@@ -22,6 +22,18 @@ const newRepoSelect = document.querySelector('#newRepoSelect');
 const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
 const newWorktreeHint = document.querySelector('#newWorktreeHint');
 const createWorktreeButton = document.querySelector('#createWorktreeButton');
+const createWorktreeDialog = document.querySelector('#createWorktreeDialog');
+const createWorktreeForm = document.querySelector('#createWorktreeForm');
+const closeCreateWorktree = document.querySelector('#closeCreateWorktree');
+const cancelCreateWorktree = document.querySelector('#cancelCreateWorktree');
+const confirmCreateWorktree = document.querySelector('#confirmCreateWorktree');
+const worktreeNameInput = document.querySelector('#worktreeNameInput');
+const worktreeRootInput = document.querySelector('#worktreeRootInput');
+const planSource = document.querySelector('#planSource');
+const planBranch = document.querySelector('#planBranch');
+const planWorktree = document.querySelector('#planWorktree');
+const planCommand = document.querySelector('#planCommand');
+const planError = document.querySelector('#planError');
 const closeNewSession = document.querySelector('#closeNewSession');
 const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
@@ -478,20 +490,79 @@ async function startSessionFromSelectedWorktree(event) {
   }
 }
 
-async function createFeatureWorktree() {
+let currentWorktreePlan = null;
+let planTimer = null;
+
+function openCreateWorktreeDialog() {
   const sourcePath = newWorktreeSelect.value;
   if (!sourcePath) return window.alert('Choose a source worktree first.');
-  const branch = window.prompt('New lowercase hyphenated branch/worktree name:');
-  if (!branch) return;
+  currentWorktreePlan = null;
+  createWorktreeForm.reset();
+  planSource.textContent = compactPath(sourcePath);
+  planBranch.textContent = '-';
+  planWorktree.textContent = '-';
+  planCommand.textContent = 'Enter a lane name to preview the command.';
+  planError.textContent = '';
+  confirmCreateWorktree.disabled = true;
+  createWorktreeDialog.showModal();
+  worktreeNameInput.focus();
+}
+
+function scheduleWorktreePlan() {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(updateWorktreePlan, 180);
+}
+
+async function updateWorktreePlan() {
+  const sourcePath = newWorktreeSelect.value;
+  const branch = worktreeNameInput.value.trim();
+  const targetRoot = worktreeRootInput.value.trim();
+  currentWorktreePlan = null;
+  planError.textContent = '';
+  confirmCreateWorktree.disabled = true;
+  if (!sourcePath || !branch) {
+    planBranch.textContent = '-';
+    planWorktree.textContent = '-';
+    planCommand.textContent = 'Enter a lane name to preview the command.';
+    return;
+  }
   try {
-    const plan = await jsonApi('/api/worktree-plan', { sourcePath, branch });
-    const ok = window.confirm(`Create this worktree?\n\n${plan.commands.map((command) => command.display).join('\n')}`);
-    if (!ok) return;
-    const created = await jsonApi('/api/worktrees', { sourcePath, branch, confirmed: true });
+    const plan = await jsonApi('/api/worktree-plan', { sourcePath, branch, targetRoot });
+    currentWorktreePlan = plan;
+    planSource.textContent = compactPath(plan.sourcePath);
+    planBranch.textContent = plan.branch;
+    planWorktree.textContent = plan.targetPath;
+    planCommand.textContent = plan.commands.map((command) => command.display).join('\n');
+    confirmCreateWorktree.disabled = false;
+  } catch (error) {
+    planBranch.textContent = '-';
+    planWorktree.textContent = '-';
+    planCommand.textContent = 'Cannot create a command preview.';
+    planError.textContent = error.message;
+  }
+}
+
+async function createFeatureWorktree(event) {
+  event?.preventDefault();
+  if (!currentWorktreePlan) await updateWorktreePlan();
+  if (!currentWorktreePlan) return;
+  confirmCreateWorktree.disabled = true;
+  confirmCreateWorktree.textContent = 'Creating...';
+  try {
+    const created = await jsonApi('/api/worktrees', {
+      sourcePath: currentWorktreePlan.sourcePath,
+      branch: currentWorktreePlan.branch,
+      targetRoot: currentWorktreePlan.targetRoot,
+      confirmed: true,
+    });
+    createWorktreeDialog.close();
     await loadNewSessionWorktrees(created.worktree?.path || created.targetPath);
     await loadSessions();
   } catch (error) {
-    window.alert(error.message);
+    planError.textContent = error.message;
+  } finally {
+    confirmCreateWorktree.disabled = false;
+    confirmCreateWorktree.textContent = 'Create worktree';
   }
 }
 
@@ -1582,7 +1653,12 @@ runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
-createWorktreeButton.addEventListener('click', createFeatureWorktree);
+createWorktreeButton.addEventListener('click', openCreateWorktreeDialog);
+createWorktreeForm.addEventListener('submit', createFeatureWorktree);
+worktreeNameInput.addEventListener('input', scheduleWorktreePlan);
+worktreeRootInput.addEventListener('input', scheduleWorktreePlan);
+closeCreateWorktree.addEventListener('click', () => createWorktreeDialog.close());
+cancelCreateWorktree.addEventListener('click', () => createWorktreeDialog.close());
 closeNewSession.addEventListener('click', () => newSessionDialog.close());
 cancelNewSession.addEventListener('click', () => newSessionDialog.close());
 collapseSidebar.addEventListener('click', () => setSidebarCollapsed(true));

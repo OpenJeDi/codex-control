@@ -67,7 +67,7 @@
       <div class="modal-head">
         <div>
           <strong>New session</strong>
-          <p>Choose an existing worktree, or create one first.</p>
+          <p>Choose an existing worktree, or create a new lane worktree.</p>
         </div>
         <button id="closeNewSession" type="button" title="Close">×</button>
       </div>
@@ -79,7 +79,10 @@
 
       <label>
         Worktree
-        <select id="newWorktreeSelect" name="cwd"></select>
+        <div class="combo-action-row">
+          <select id="newWorktreeSelect" name="cwd"></select>
+          <button id="createWorktreeButton" class="icon-button" type="button" title="Create worktree">+</button>
+        </div>
       </label>
       <div id="newWorktreeHint" class="hint"></div>
 
@@ -112,10 +115,53 @@
       </label>
 
       <div class="modal-actions">
-        <button id="createWorktreeButton" type="button">Create worktree…</button>
         <span></span>
         <button id="cancelNewSession" type="button">Cancel</button>
         <button type="submit">Start session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="createWorktreeDialog" class="modal">
+    <form id="createWorktreeForm" class="modal-card" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>Create worktree</strong>
+          <p>Enter a lane name. Codex Control derives the branch and worktree from the current workflow rules.</p>
+        </div>
+        <button id="closeCreateWorktree" type="button" title="Close">×</button>
+      </div>
+
+      <label>
+        Lane name
+        <input id="worktreeNameInput" name="laneName" type="text" placeholder="modular transcript block parsers" autocomplete="off">
+      </label>
+
+      <div class="plan-summary">
+        <div><strong>Source</strong><span id="planSource">-</span></div>
+        <div><strong>Branch</strong><span id="planBranch">-</span></div>
+        <div><strong>Worktree</strong><span id="planWorktree">-</span></div>
+      </div>
+
+      <details class="plan-details">
+        <summary>Change defaults</summary>
+        <label>
+          Worktree root
+          <input id="worktreeRootInput" name="targetRoot" type="text" placeholder="default from source worktree">
+        </label>
+      </details>
+
+      <details class="plan-details" open>
+        <summary>Git command</summary>
+        <pre id="planCommand" class="command-preview">Enter a lane name to preview the command.</pre>
+      </details>
+
+      <div id="planError" class="hint error-text"></div>
+
+      <div class="modal-actions">
+        <span></span>
+        <button id="cancelCreateWorktree" type="button">Cancel</button>
+        <button id="confirmCreateWorktree" type="submit" disabled>Create worktree</button>
       </div>
     </form>
   </dialog>
