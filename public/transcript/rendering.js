@@ -60,6 +60,39 @@ export function renderInlineMarkdown(text) {
   return html;
 }
 
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed.includes('|')) return [];
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  return inner.split('|').map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line) {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function renderMarkdownTable(headerLine, separatorLine, bodyLines) {
+  const headers = splitMarkdownTableRow(headerLine);
+  const separator = splitMarkdownTableRow(separatorLine);
+  const columnCount = Math.min(headers.length, separator.length);
+  if (columnCount < 2) return '';
+  const normalizeCells = (line) => {
+    const cells = splitMarkdownTableRow(line);
+    return Array.from({ length: columnCount }, (_value, index) => cells[index] ?? '');
+  };
+  const head = normalizeCells(headerLine)
+    .map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`)
+    .join('');
+  const body = bodyLines.map((line) => {
+    const cells = normalizeCells(line)
+      .map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`)
+      .join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
 export function renderMarkdownBlocks(text) {
   const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
   const blocks = [];
@@ -77,11 +110,28 @@ export function renderMarkdownBlocks(text) {
     list = null;
   };
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (!line.trim()) {
       flushParagraph();
       flushList();
       continue;
+    }
+    if (line.includes('|') && isMarkdownTableSeparator(lines[index + 1])) {
+      const tableLines = [];
+      let nextIndex = index + 2;
+      while (nextIndex < lines.length && lines[nextIndex].trim().includes('|')) {
+        tableLines.push(lines[nextIndex]);
+        nextIndex += 1;
+      }
+      const table = renderMarkdownTable(line, lines[index + 1], tableLines);
+      if (table) {
+        flushParagraph();
+        flushList();
+        blocks.push(table);
+        index = nextIndex - 1;
+        continue;
+      }
     }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {

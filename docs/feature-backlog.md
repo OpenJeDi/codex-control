@@ -74,7 +74,8 @@ Status: core behavior is implemented; remaining items are polish/follow-up unles
 
 ## Transcript rendering polish
 
-- Improve the basic safe Markdown renderer: richer tables/blockquotes/task lists if they become useful, without making command/raw payload rendering noisy.
+- Improve the basic safe Markdown renderer: blockquotes/task lists and richer table handling if they become useful, without making command/raw payload rendering noisy.
+- Follow-up: table rendering currently supports basic pipe tables only; add escaped pipe handling, alignment, and better overflow styling if tables become common.
 - Improve existing session image rendering polish later: captions, sizing, and multiple-image layout. Basic Codex structured image parts, Markdown local image/video links, and absolute local file links now render/link through media endpoints.
 - Keep commands, file changes, raw JSON, and large/noisy payloads collapsible in monospace.
 - Preserve inspectability while making normal Codex replies pleasant to read.
