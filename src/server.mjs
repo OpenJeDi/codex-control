@@ -791,9 +791,9 @@ async function gitInfoForCwd(cwd) {
   const info = {};
   try {
     const [originUrl, branch, sha] = await Promise.all([
-      execFileText('git', ['-C', key, 'remote', 'get-url', 'origin']).catch(() => ''),
-      execFileText('git', ['-C', key, 'branch', '--show-current']).catch(() => ''),
-      execFileText('git', ['-C', key, 'rev-parse', 'HEAD']).catch(() => ''),
+      execFileText('git', gitArgs(key, ['remote', 'get-url', 'origin'])).catch(() => ''),
+      execFileText('git', gitArgs(key, ['branch', '--show-current'])).catch(() => ''),
+      execFileText('git', gitArgs(key, ['rev-parse', 'HEAD'])).catch(() => ''),
     ]);
     if (originUrl.trim()) info.originUrl = originUrl.trim();
     if (branch.trim()) info.branch = branch.trim();
@@ -832,6 +832,9 @@ function threadIdFromRolloutPath(filePath) {
   return match?.[1] ?? null;
 }
 
+function gitArgs(cwd, args = []) {
+  return ['-c', `safe.directory=${path.win32.resolve(String(cwd ?? ''))}`, '-C', cwd, ...args];
+}
 function execFileText(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { windowsHide: true, maxBuffer: 1024 * 1024 * 10, ...options }, (error, stdout, stderr) => {
@@ -869,7 +872,7 @@ async function worktreesForRepo(repoUrl) {
     if (seen.has(key)) continue;
     seen.add(key);
     try {
-      const output = await execFileText('git', ['-C', cwd, 'worktree', 'list', '--porcelain']);
+      const output = await execFileText('git', gitArgs(cwd, ['worktree', 'list', '--porcelain']));
       return { repo, source: cwd, worktrees: parseWorktreeList(output) };
     } catch {
       // Try the next known cwd.
@@ -1386,11 +1389,11 @@ async function buildWorktreePlan(body) {
 
   const targetRoot = String(body.targetRoot ?? '').trim() || repoWorktreeRoot(sourcePath);
   const targetPath = path.win32.join(targetRoot, branch);
-  const existing = await execFileText('git', ['-C', sourcePath, 'branch', '--list', branch]);
+  const existing = await execFileText('git', gitArgs(sourcePath, ['branch', '--list', branch]));
   const branchExists = Boolean(existing.trim());
   const args = branchExists
-    ? ['-C', sourcePath, 'worktree', 'add', targetPath, branch]
-    : ['-C', sourcePath, 'worktree', 'add', '-b', branch, targetPath];
+    ? gitArgs(sourcePath, ['worktree', 'add', targetPath, branch])
+    : gitArgs(sourcePath, ['worktree', 'add', '-b', branch, targetPath]);
   const display = branchExists
     ? `git -C ${quoteWinArg(sourcePath)} worktree add ${quoteWinArg(targetPath)} ${quoteWinArg(branch)}`
     : `git -C ${quoteWinArg(sourcePath)} worktree add -b ${quoteWinArg(branch)} ${quoteWinArg(targetPath)}`;

@@ -539,6 +539,7 @@ async function loadNewSessionWorktrees(preferredPath = '') {
   newWorktreeSelect.innerHTML = '';
   newWorktreeHint.textContent = '';
   createWorktreeButton.disabled = true;
+  createWorktreeButton.title = 'Choose a source worktree first.';
   if (!repo) {
     newWorktreeHint.textContent = 'Choose a repo first.';
     return;
@@ -560,6 +561,7 @@ async function loadNewSessionWorktrees(preferredPath = '') {
     }).join('');
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
     createWorktreeButton.disabled = false;
+    createWorktreeButton.title = '';
     newWorktreeHint.textContent = `${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} available.`;
   } catch (error) {
     newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';

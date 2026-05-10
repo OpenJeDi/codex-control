@@ -47,6 +47,8 @@ input, select {
 }
 button { cursor: pointer; background: var(--panel-2); }
 button:hover { border-color: var(--accent-2); background: var(--panel-3); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
 .layout {
   display: grid;
   grid-template-columns: var(--sidebar-width) 6px minmax(0, 1fr);
