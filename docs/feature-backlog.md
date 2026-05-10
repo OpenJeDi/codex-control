@@ -24,7 +24,8 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 ## Session model controls
 
 - Implemented: show the model used by the active session in the session UI, with source-aware status (`thread.modelSource`) visible in session/turn rendering.
-- Remaining: make that model label interactive by opening a dropdown to switch model/provider for the current session.
+- Implemented: model and thinking controls in the new-session modal and existing-session composer. These are browser-local defaults plus per-session preferences and are sent as `turn/start` overrides for the next normal turn.
+- Remaining: move the static model list to Codex model/provider capability data where available, and make unavailable/unsupported combinations explicit.
 - The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
 
 ## Prompt queue, steering, interruption, and approval UX

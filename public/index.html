@@ -89,6 +89,25 @@
       </label>
       <div id="newWorktreeHint" class="hint"></div>
 
+      <div class="model-controls modal-model-controls" title="Applies to the first normal turn in this session and is remembered locally.">
+        <select name="model" aria-label="Model">
+          <option value="">config model</option>
+          <option value="gpt-5.5">gpt-5.5</option>
+          <option value="gpt-5.4">gpt-5.4</option>
+          <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+          <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+          <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+          <option value="gpt-5.2">gpt-5.2</option>
+        </select>
+        <select name="effort" aria-label="Thinking level">
+          <option value="">config thinking</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+        </select>
+      </div>
+
       <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session and is remembered locally.">
         <select name="sandboxPolicy" aria-label="Sandbox policy">
           <option value="">config sandbox</option>

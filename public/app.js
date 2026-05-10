@@ -58,6 +58,10 @@ const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
 const PERMISSION_THREADS_KEY = 'codex-control.permissionThreads';
+const MODEL_DEFAULTS_KEY = 'codex-control.modelDefaults';
+const MODEL_THREADS_KEY = 'codex-control.modelThreads';
+const MODEL_OPTIONS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2'];
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'];
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const truncate = (value, max = 12000) => {
@@ -452,6 +456,90 @@ function bindPermissionPreferenceControls(root, threadId = '') {
   });
 }
 
+function modelDefaults() {
+  return normalizeModelPreference(readJsonLocalStorage(MODEL_DEFAULTS_KEY, {}));
+}
+
+function modelThreadPrefs() {
+  return readJsonLocalStorage(MODEL_THREADS_KEY, {});
+}
+
+function modelForThread(threadId) {
+  const prefs = modelThreadPrefs();
+  return Object.prototype.hasOwnProperty.call(prefs, String(threadId)) ? normalizeModelPreference(prefs[String(threadId)]) : null;
+}
+
+function normalizeModelPreference(value = {}) {
+  const model = normalizeModelValue(value.model);
+  const effort = String(value.effort ?? '').trim().toLowerCase();
+  return {
+    model,
+    effort: EFFORT_OPTIONS.includes(effort) ? effort : '',
+  };
+}
+
+function effectiveModelPreference(threadId = '') {
+  return {
+    ...modelDefaults(),
+    ...(threadId ? modelForThread(threadId) ?? {} : {}),
+  };
+}
+
+function modelPreferenceFromControls(root) {
+  return normalizeModelPreference({
+    model: root?.querySelector('[name="model"]')?.value || '',
+    effort: root?.querySelector('[name="effort"]')?.value || '',
+  });
+}
+
+function applyModelPreference(root, pref = modelDefaults()) {
+  const normalized = normalizeModelPreference(pref);
+  const model = root?.querySelector('[name="model"]');
+  const effort = root?.querySelector('[name="effort"]');
+  if (model) {
+    ensureModelOption(model, normalized.model);
+    model.value = normalized.model;
+  }
+  if (effort) effort.value = normalized.effort;
+}
+
+function saveModelDefaults(pref) {
+  localStorage.setItem(MODEL_DEFAULTS_KEY, JSON.stringify(normalizeModelPreference(pref)));
+}
+
+function saveThreadModel(threadId, pref) {
+  if (!threadId) return;
+  const current = modelThreadPrefs();
+  current[String(threadId)] = normalizeModelPreference(pref);
+  localStorage.setItem(MODEL_THREADS_KEY, JSON.stringify(current));
+}
+
+function modelPayload(pref = modelDefaults()) {
+  const normalized = normalizeModelPreference(pref);
+  return {
+    model: normalized.model,
+    effort: normalized.effort,
+  };
+}
+
+function bindModelPreferenceControls(root, threadId = '') {
+  const bindingKey = threadId || 'global';
+  root?.querySelectorAll('[name="model"], [name="effort"]').forEach((control) => {
+    if (control.dataset.modelBinding === bindingKey) return;
+    control.dataset.modelBinding = bindingKey;
+    control.addEventListener('change', () => {
+      const pref = modelPreferenceFromControls(root);
+      saveModelDefaults(pref);
+      if (threadId) saveThreadModel(threadId, pref);
+    });
+  });
+}
+
+function ensureModelOption(select, model) {
+  if (!select || !model || [...select.options].some((option) => option.value === model)) return;
+  select.insertAdjacentHTML('beforeend', `<option value="${escapeAttribute(model)}">${escapeHtml(model)}</option>`);
+}
+
 function normalizeRepoInput(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -648,7 +736,9 @@ async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
   savePermissionDefaults(pref);
+  saveModelDefaults(modelPref);
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
   if (!cwd) return window.alert('Choose a worktree first.');
@@ -664,6 +754,7 @@ async function startSessionFromSelectedWorktree(event) {
       return json;
     });
     if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
+    if (data.thread?.id) saveThreadModel(data.thread.id, modelPref);
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
@@ -747,9 +838,12 @@ async function createFeatureWorktree(event) {
     newWorktreeSelect.value = createdPath;
     newSessionDialog.close();
     const pref = preferenceFromControls(newSessionForm);
+    const modelPref = modelPreferenceFromControls(newSessionForm);
     savePermissionDefaults(pref);
-    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref) });
+    saveModelDefaults(modelPref);
+    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(modelPref) });
     if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
+    if (started.thread?.id) saveThreadModel(started.thread.id, modelPref);
     if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
@@ -796,6 +890,7 @@ async function openNewSessionDialog() {
   syncNewSessionRepoOptions();
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
   applyPermissionPreference(newSessionForm, permissionDefaults());
+  applyModelPreference(newSessionForm, modelDefaults());
   newSessionDialog.showModal();
   await loadNewSessionWorktrees();
 }
@@ -931,6 +1026,7 @@ async function loadDetail(id, { quiet = false } = {}) {
       restorePromptFocus(promptForm, draftSelection);
     }
     bindPermissionPreferenceControls(promptForm, id);
+    bindModelPreferenceControls(promptForm, id);
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => toggleArchiveThread(id, data.thread));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
@@ -993,8 +1089,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <summary class="session-summary">
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
-          <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
-          ${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}
         </summary>
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
@@ -1035,6 +1129,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <span class="attachment-status" aria-live="polite"></span>
         ${renderPermissionControls(effectivePermissionPreference(thread.id, permissionSettings))}
         <span class="prompt-spacer"></span>
+        ${renderModelControls(effectiveModelPreference(thread.id), 'prompt-model-controls')}
         ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
@@ -1049,6 +1144,21 @@ function selectedAttribute(value, expected) {
 
 function checkedAttribute(value) {
   return value ? ' checked' : '';
+}
+
+function renderModelControls(settings = {}, extraClass = '') {
+  const normalized = normalizeModelPreference(settings);
+  const models = [...new Set([...MODEL_OPTIONS, normalized.model].filter(Boolean))];
+  return `<div class="model-controls ${escapeHtml(extraClass)}" title="Applies to the next normal turn. Steer cannot change model or thinking.">
+    <select name="model" aria-label="Model">
+      <option value="">config model</option>
+      ${models.map((model) => `<option value="${escapeAttribute(model)}"${model === normalized.model ? ' selected' : ''}>${escapeHtml(model)}</option>`).join('')}
+    </select>
+    <select name="effort" aria-label="Thinking level">
+      <option value="">config thinking</option>
+      ${EFFORT_OPTIONS.map((effort) => `<option value="${escapeAttribute(effort)}"${effort === normalized.effort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
+    </select>
+  </div>`;
 }
 
 function renderPermissionControls(settings = {}) {
@@ -1187,8 +1297,11 @@ async function toggleArchiveThread(id, thread = {}) {
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   const form = detailEl.querySelector('#promptForm');
   const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
   savePermissionDefaults(pref);
   saveThreadPermission(id, pref);
+  saveModelDefaults(modelPref);
+  saveThreadModel(id, modelPref);
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -1239,8 +1352,11 @@ async function submitPrompt(event, id) {
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
   const pref = preferenceFromControls(form);
+  const modelPref = modelPreferenceFromControls(form);
   savePermissionDefaults(pref);
   saveThreadPermission(id, pref);
+  saveModelDefaults(modelPref);
+  saveThreadModel(id, modelPref);
   const formData = new FormData(form);
   const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
@@ -1854,6 +1970,7 @@ repoFilter.addEventListener('change', () => {
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
 bindPermissionPreferenceControls(newSessionForm);
+bindModelPreferenceControls(newSessionForm);
 addRepoButton.addEventListener('click', openAddRepoDialog);
 addRepoForm.addEventListener('submit', addRepository);
 repoUrlInput.addEventListener('input', updateRepoPreview);

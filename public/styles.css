@@ -423,7 +423,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   .splitter { display: none; }
   .list-panel { grid-template-columns: 0 minmax(0, 1fr); }
   .session-header { grid-template-columns: 1fr; }
-  .session-summary { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .session-summary { grid-template-columns: minmax(0, 1fr) auto; }
   .session-header .detail-actions { justify-content: start; }
   .turn-compact { grid-template-columns: 1fr; }
 }
@@ -451,7 +451,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .session-summary {
   cursor: pointer;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  grid-template-columns: minmax(180px, 1fr) auto;
   gap: 8px;
   align-items: center;
   min-height: 38px;
@@ -534,18 +534,21 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .prompt-bar { position: relative; grid-row: 4; grid-column: 1; border-top: 1px solid var(--line); padding: 10px; background: color-mix(in srgb, var(--panel) 96%, black); }
 .prompt-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-width: 0; }
 .prompt-spacer { flex: 1 1 auto; min-width: 12px; }
-.permission-controls {
+.permission-controls,
+.model-controls {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
-.permission-controls select {
+.permission-controls select,
+.model-controls select {
   width: auto;
   max-width: 150px;
   padding: 7px 8px;
   font-size: 12px;
 }
+.prompt-model-controls select:first-child { max-width: 190px; }
 .network-toggle {
   display: inline-flex;
   align-items: center;
@@ -563,6 +566,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 .modal-permissions select { width: 100%; max-width: none; }
+.modal-model-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.modal-model-controls select { width: 100%; max-width: none; }
 .attach-button {
   position: relative;
   display: inline-grid;

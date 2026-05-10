@@ -1496,6 +1496,8 @@ async function readTurnPayload(req) {
     return {
       cwd: parts.find((part) => part.name === 'cwd')?.data.toString('utf8') ?? '',
       prompt: parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '',
+      model: parts.find((part) => part.name === 'model')?.data.toString('utf8') ?? '',
+      effort: parts.find((part) => part.name === 'effort')?.data.toString('utf8') ?? '',
       approvalPolicy: parts.find((part) => part.name === 'approvalPolicy')?.data.toString('utf8') ?? '',
       sandboxPolicy: parts.find((part) => part.name === 'sandboxPolicy')?.data.toString('utf8') ?? '',
       networkAccess: parts.find((part) => part.name === 'networkAccess')?.data.toString('utf8') ?? '',
@@ -1507,8 +1509,23 @@ async function readTurnPayload(req) {
   return { ...body, prompt: String(body.prompt ?? ''), files: [] };
 }
 
+function normalizeModelText(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
+  return text;
+}
+
 function turnOverridesFromPayload(payload = {}) {
   const overrides = {};
+  const model = normalizeModelText(payload.model);
+  if (model) overrides.model = model;
+
+  const effort = String(payload.effort ?? '').trim().toLowerCase();
+  if (['low', 'medium', 'high', 'xhigh'].includes(effort)) {
+    overrides.effort = effort;
+  }
+
   const approvalPolicy = String(payload.approvalPolicy ?? '').trim();
   if (['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy)) {
     overrides.approvalPolicy = approvalPolicy;
