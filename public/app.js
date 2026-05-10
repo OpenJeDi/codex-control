@@ -290,6 +290,11 @@ function restoreOpenTurnDetails(open) {
     if (details && open.has(turn.dataset.turnId || String(index))) details.open = true;
   });
 }
+
+function restoreSessionDetailsOpen(open) {
+  const details = detailEl.querySelector('.session-meta');
+  if (details) details.open = Boolean(open);
+}
 function captureScrollAnchor(scroller) {
   if (!scroller) return null;
   const turns = [...scroller.querySelectorAll('.turn[data-turn-id]')];
@@ -1212,6 +1217,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
   const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
   const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
+  const sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
   const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
   const previousForm = detailEl.querySelector('#promptForm');
   const preservePromptForm = quiet && id === previousId && previousForm;
@@ -1253,6 +1259,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     detailEl.querySelectorAll('[data-action=steer-turn]').forEach((button) => { button.onclick = () => steerTurn(id, button); });
     bindQueuedMessageControls(id);
     restoreOpenTurnDetails(openTurnDetails);
+    restoreSessionDetailsOpen(sessionDetailsOpen);
     bindCodeCopyControls();
     bindSessionImageViewer();
     bindDetailScrollControls();
