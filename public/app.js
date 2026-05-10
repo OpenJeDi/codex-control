@@ -54,6 +54,7 @@ let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
+const ACTIVE_SESSION_KEY = 'codex-control.activeSession';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
@@ -382,6 +383,16 @@ function saveSelectedRepo(repo) {
   const value = String(repo ?? '').trim();
   if (value) localStorage.setItem(SELECTED_REPO_KEY, value);
   else localStorage.removeItem(SELECTED_REPO_KEY);
+}
+
+function savedActiveSession() {
+  return localStorage.getItem(ACTIVE_SESSION_KEY) || '';
+}
+
+function saveActiveSession(id) {
+  const value = String(id ?? '').trim();
+  if (value) localStorage.setItem(ACTIVE_SESSION_KEY, value);
+  else localStorage.removeItem(ACTIVE_SESSION_KEY);
 }
 
 function saveCustomRepos(repos) {
@@ -999,7 +1010,11 @@ async function loadSessions({ quiet = false } = {}) {
     for (const button of listEl.querySelectorAll('.session')) {
       button.addEventListener('click', () => loadDetail(button.dataset.id));
     }
-    if (!activeId && data[0]?.id) await loadDetail(data[0].id);
+    if (!activeId) {
+      const savedId = savedActiveSession();
+      const targetId = data.some((thread) => thread.id === savedId) ? savedId : data[0]?.id;
+      if (targetId) await loadDetail(targetId);
+    }
     else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeId);
   } catch (error) {
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
@@ -1280,6 +1295,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     direction: previousTextarea.selectionDirection,
   } : null;
   activeId = id;
+  saveActiveSession(id);
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
     detailEl.className = 'empty';
@@ -1589,6 +1605,7 @@ async function toggleArchiveThread(id, thread = {}) {
   if (!ok) return;
   await jsonApi(`/api/threads/${encodeURIComponent(id)}/archive`, {});
   activeId = null;
+  saveActiveSession('');
   detailEl.className = 'detail empty';
   detailEl.textContent = 'Session archived.';
   scheduleLoadSessions();
