@@ -745,8 +745,10 @@ function renderPermissionControls(settings = {}) {
     </select>
     <select name="approvalPolicy" aria-label="Approval policy">
       <option value=""${selectedAttribute(approval, '')}>config approvals</option>
-      <option value="onRequest"${selectedAttribute(approval, 'onRequest')}>approve on request</option>
-      <option value="unlessTrusted"${selectedAttribute(approval, 'unlessTrusted')}>unless trusted</option>
+      <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
+      <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
+      <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
+      <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
       <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
     </select>
     <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"${checkedAttribute(network)}> network</label>

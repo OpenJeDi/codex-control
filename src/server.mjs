@@ -1313,7 +1313,7 @@ async function readTurnPayload(req) {
 function turnOverridesFromPayload(payload = {}) {
   const overrides = {};
   const approvalPolicy = String(payload.approvalPolicy ?? '').trim();
-  if (['onRequest', 'unlessTrusted', 'never'].includes(approvalPolicy)) {
+  if (['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy)) {
     overrides.approvalPolicy = approvalPolicy;
   }
 

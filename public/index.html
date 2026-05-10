@@ -92,8 +92,10 @@
         </select>
         <select name="approvalPolicy" aria-label="Approval policy">
           <option value="">config approvals</option>
-          <option value="onRequest">approve on request</option>
-          <option value="unlessTrusted">unless trusted</option>
+          <option value="untrusted">untrusted only</option>
+          <option value="on-failure">on failure</option>
+          <option value="on-request">on request</option>
+          <option value="granular">granular</option>
           <option value="never">never approve</option>
         </select>
         <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"> network</label>
