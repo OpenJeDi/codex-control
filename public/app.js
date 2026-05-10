@@ -1132,6 +1132,7 @@ async function createFeatureWorktree(event) {
   confirmCreateWorktree.disabled = true;
   confirmCreateWorktree.textContent = 'Creating...';
   try {
+    const sessionName = worktreeNameInput.value.trim() || currentWorktreePlan.branch;
     const created = await jsonApi('/api/worktrees', {
       sourcePath: currentWorktreePlan.sourcePath,
       branch: currentWorktreePlan.branch,
@@ -1150,6 +1151,7 @@ async function createFeatureWorktree(event) {
     const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(modelPref) });
     if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
     if (started.thread?.id) saveThreadModel(started.thread.id, modelPref);
+    if (started.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(started.thread.id)}/name`, { name: sessionName });
     if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
