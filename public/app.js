@@ -511,8 +511,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
           <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
-          <span>${escapeHtml(thread.gitInfo?.branch || 'no branch')}</span>
-          <span>${escapeHtml(displayRepo(thread.gitInfo?.originUrl) || 'no repo')}</span>
         </summary>
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>

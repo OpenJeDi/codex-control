@@ -326,7 +326,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   .list-panel { grid-template-columns: 0 minmax(0, 1fr); }
   .session-header { grid-template-columns: 1fr; }
   .session-summary { grid-template-columns: minmax(0, 1fr) auto auto; }
-  .session-summary > span:not(.badge) { display: none; }
   .session-header .detail-actions { justify-content: start; }
   .turn-compact { grid-template-columns: 1fr; }
 }
@@ -354,7 +353,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .session-summary {
   cursor: pointer;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto auto auto auto;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
   gap: 8px;
   align-items: center;
   min-width: 0;
