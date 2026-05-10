@@ -671,19 +671,31 @@ function configModelPreference() {
   };
 }
 
-function effectiveModelPreference(threadId = '') {
+function inheritedModelPreference(thread = null) {
+  const config = configModelPreference();
+  return {
+    model: modelFromValue(thread?.model) || config.model,
+    effort: effortFromValue(thread?.effort) || config.effort,
+  };
+}
+
+function effectiveModelPreference(threadId = '', inherited = configModelPreference()) {
   const defaults = modelDefaults();
   const thread = threadId ? modelForThread(threadId) ?? {} : {};
   const config = configModelPreference();
-  const selectedModel = thread.model || defaults.model || config.model;
-  const selectedEffort = thread.effort || defaults.effort || config.effort;
-  const explicitModel = isModelExplicit(selectedModel, config.model);
-  const explicitEffort = isEffortExplicit(selectedEffort, config.effort);
+  const inheritedModel = normalizeModelValue(inherited.model) || config.model;
+  const inheritedEffort = effortFromValue(inherited.effort) || config.effort;
+  const selectedModel = thread.model || defaults.model || inheritedModel;
+  const selectedEffort = thread.effort || defaults.effort || inheritedEffort;
+  const explicitModel = isModelExplicit(selectedModel, inheritedModel);
+  const explicitEffort = isEffortExplicit(selectedEffort, inheritedEffort);
   return {
-    model: explicitModel ? selectedModel : config.model,
-    effort: explicitEffort ? selectedEffort : config.effort,
+    model: explicitModel ? selectedModel : inheritedModel,
+    effort: explicitEffort ? selectedEffort : inheritedEffort,
     explicitModel,
     explicitEffort,
+    inheritedModel,
+    inheritedEffort,
   };
 }
 
@@ -697,25 +709,28 @@ function modelPreferenceFromControls(root) {
 function applyModelPreference(root, pref = modelDefaults()) {
   const normalized = normalizeModelPreference(pref);
   const config = configModelPreference();
-  const effective = { ...config, ...normalized };
-  const explicitModel = isModelExplicit(effective.model, config.model);
-  const explicitEffort = isEffortExplicit(effective.effort, config.effort);
   const model = root?.querySelector('[data-setting-kind="model"]');
   const effort = root?.querySelector('[data-setting-kind="effort"]');
   const modelValue = root?.querySelector('[name="model"]');
   const effortValue = root?.querySelector('[name="effort"]');
+  const inheritedModel = normalizeModelValue(model?.dataset.inheritedModel) || config.model;
+  const inheritedEffort = effortFromValue(effort?.dataset.inheritedEffort) || config.effort;
+  const selectedModel = normalized.model || inheritedModel;
+  const selectedEffort = normalized.effort || inheritedEffort;
+  const explicitModel = isModelExplicit(selectedModel, inheritedModel);
+  const explicitEffort = isEffortExplicit(selectedEffort, inheritedEffort);
   if (model) {
-    renderModelOptions(model, effective.model);
-    model.value = effective.model;
+    renderModelOptions(model, selectedModel);
+    model.value = selectedModel;
     model.dataset.explicit = explicitModel ? '1' : '0';
   }
   if (effort) {
-    renderEffortOptions(effort, effective.model, effective.effort);
-    effort.value = effective.effort;
+    renderEffortOptions(effort, selectedModel, selectedEffort);
+    effort.value = selectedEffort;
     effort.dataset.explicit = explicitEffort ? '1' : '0';
   }
-  if (modelValue) modelValue.value = explicitModel ? normalized.model : '';
-  if (effortValue) effortValue.value = explicitEffort ? normalized.effort : '';
+  if (modelValue) modelValue.value = explicitModel ? selectedModel : '';
+  if (effortValue) effortValue.value = explicitEffort ? selectedEffort : '';
   updateSettingSource(root?.querySelector('[data-source-for="model"]'), explicitModel);
   updateSettingSource(root?.querySelector('[data-source-for="effort"]'), explicitEffort);
 }
@@ -826,8 +841,10 @@ function syncModelControls(root, changedControl = null) {
   }
   if (changedControl === effort) effort.dataset.explicit = '1';
   const config = configModelPreference();
-  const explicitModel = model.dataset.explicit === '1' && isModelExplicit(model.value, config.model);
-  const explicitEffort = effort.dataset.explicit === '1' && isEffortExplicit(effort.value, config.effort);
+  const inheritedModel = normalizeModelValue(model.dataset.inheritedModel) || config.model;
+  const inheritedEffort = effortFromValue(effort.dataset.inheritedEffort) || config.effort;
+  const explicitModel = model.dataset.explicit === '1' && isModelExplicit(model.value, inheritedModel);
+  const explicitEffort = effort.dataset.explicit === '1' && isEffortExplicit(effort.value, inheritedEffort);
   model.dataset.explicit = explicitModel ? '1' : '0';
   effort.dataset.explicit = explicitEffort ? '1' : '0';
   modelValue.value = explicitModel ? model.value : '';
@@ -1583,7 +1600,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <span class="attachment-status" aria-live="polite"></span>
         ${renderPermissionControls(effectivePermissionPreference(thread.id, permissionSettings))}
         <span class="prompt-spacer"></span>
-        ${renderModelControls(effectiveModelPreference(thread.id), 'prompt-model-controls')}
+        ${renderModelControls(effectiveModelPreference(thread.id, inheritedModelPreference(thread)), 'prompt-model-controls')}
         ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
@@ -1610,18 +1627,21 @@ function checkedAttribute(value) {
 
 function renderModelControls(settings = {}, extraClass = '') {
   const normalized = normalizeModelPreference(settings);
-  const selectedModel = normalized.model || configModelPreference().model;
-  const selectedEffort = normalized.effort || configModelPreference().effort;
+  const config = configModelPreference();
+  const inheritedModel = normalizeModelValue(settings.inheritedModel) || config.model;
+  const inheritedEffort = effortFromValue(settings.inheritedEffort) || config.effort;
+  const selectedModel = normalized.model || inheritedModel;
+  const selectedEffort = normalized.effort || inheritedEffort;
   const explicitModel = Boolean(settings.explicitModel);
   const explicitEffort = Boolean(settings.explicitEffort);
   return `<div class="model-controls ${escapeHtml(extraClass)}" title="Applies to the next normal turn. Steer cannot change model or thinking.">
     <span class="setting-source ${explicitModel ? 'explicit' : 'inherited'}" data-source-for="model" title="${explicitModel ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
-    <select data-setting-kind="model" aria-label="Model" data-explicit="${explicitModel ? '1' : '0'}">
+    <select data-setting-kind="model" aria-label="Model" data-explicit="${explicitModel ? '1' : '0'}" data-inherited-model="${escapeAttribute(inheritedModel)}">
       ${modelOptions().map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('')}
     </select>
     <input type="hidden" name="model" value="${explicitModel ? escapeAttribute(selectedModel) : ''}">
     <span class="setting-source ${explicitEffort ? 'explicit' : 'inherited'}" data-source-for="effort" title="${explicitEffort ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
-    <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="${explicitEffort ? '1' : '0'}">
+    <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="${explicitEffort ? '1' : '0'}" data-inherited-effort="${escapeAttribute(inheritedEffort)}">
       ${[...new Set([...effortOptionsForModel(selectedModel), selectedEffort].filter(Boolean))].map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selectedEffort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
     </select>
     <input type="hidden" name="effort" value="${explicitEffort ? escapeAttribute(selectedEffort) : ''}">
