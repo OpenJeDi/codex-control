@@ -829,6 +829,7 @@ function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
     model: extractModelFromPayload(turn),
+    effort: extractEffortFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
     items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
   };
@@ -950,6 +951,40 @@ function extractModelFromPayload(value) {
   for (const candidate of candidates) {
     const model = extractModelFromPayload(candidate);
     if (model) return model;
+  }
+
+  return '';
+}
+
+function normalizeEffortValue(value) {
+  const text = String(value ?? '').trim();
+  return ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(text.toLowerCase()) ? text : '';
+}
+
+function extractEffortFromPayload(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return normalizeEffortValue(value);
+  if (typeof value !== 'object') return '';
+
+  const candidates = [
+    value.effort,
+    value.reasoningEffort,
+    value.reasoning_effort,
+    value.thinkingLevel,
+    value.thinking_level,
+    value.config?.effort,
+    value.config?.reasoningEffort,
+    value.settings?.effort,
+    value.settings?.reasoningEffort,
+    value.metadata?.effort,
+    value.metadata?.reasoningEffort,
+    value.reasoning?.effort,
+    value.model?.reasoningEffort,
+  ];
+
+  for (const candidate of candidates) {
+    const effort = extractEffortFromPayload(candidate);
+    if (effort) return effort;
   }
 
   return '';

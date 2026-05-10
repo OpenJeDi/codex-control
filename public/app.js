@@ -126,7 +126,47 @@ function modelFromValue(value) {
   return '';
 }
 
+function effortFromValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(text.toLowerCase()) ? text : '';
+  }
+  if (typeof value !== 'object') return '';
+  const candidates = [
+    value.effort,
+    value.reasoningEffort,
+    value.reasoning_effort,
+    value.thinkingLevel,
+    value.thinking_level,
+    value.config?.effort,
+    value.config?.reasoningEffort,
+    value.settings?.effort,
+    value.settings?.reasoningEffort,
+    value.metadata?.effort,
+    value.metadata?.reasoningEffort,
+    value.reasoning?.effort,
+    value.model?.reasoningEffort,
+  ];
+  for (const candidate of candidates) {
+    const effort = effortFromValue(candidate);
+    if (effort) return effort;
+  }
+  return '';
+}
+
+function effortFromThread(thread = {}, turns = []) {
+  const direct = effortFromValue(thread) || effortFromValue(thread.config) || effortFromValue(thread.settings) || effortFromValue(thread.metadata);
+  if (direct) return direct;
+  for (const turn of [...turns].reverse()) {
+    const effort = effortFromValue(turn);
+    if (effort) return effort;
+  }
+  return '';
+}
+
 function modelFromThread(thread = {}, turns = []) {
+
   const direct = modelFromValue(thread.model)
     || modelFromValue(thread.currentModel)
     || modelFromValue(thread.config?.model)
@@ -672,6 +712,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
   const model = modelFromThread(thread, turns);
+  const effort = effortFromThread(thread, turns);
   const modelSource = thread?.modelSource || 'unknown';
   const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return `<div class="detail-shell">
@@ -681,6 +722,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
           <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
+          ${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}
         </summary>
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
@@ -688,6 +730,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
             <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
             <strong>Status</strong><span>${escapeHtml(status)}</span>
             <strong>Model</strong><span>${escapeHtml(model || 'unknown')}</span>
+            <strong>Thinking</strong><span>${escapeHtml(effort || 'unknown')}</span>
             <strong>Model source</strong><span>${escapeHtml(modelSource)}</span>
             <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
             <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
@@ -1071,6 +1114,7 @@ function renderTurn(turn, index, thread) {
     : (threadBusy && turnStatus === 'interrupted' ? '' : turn.status);
   const status = String(statusValue ?? '').toLowerCase();
   const model = modelFromValue(turn);
+  const effort = effortFromValue(turn);
   const summary = turnSummary(turn);
   const innerItems = [
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
@@ -1081,7 +1125,7 @@ function renderTurn(turn, index, thread) {
   const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || (turn.steeredMessages?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
   const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
   return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
-    <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
+    <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
     <div class="turn-compact">
       <article>
         <div class="item-type">Prompt</div>

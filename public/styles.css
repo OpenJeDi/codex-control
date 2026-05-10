@@ -224,6 +224,7 @@ body.sidebar-collapsed .splitter { display: none; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; }
 .badge { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; background: rgba(255,255,255,0.03); }
 .badge.model { border-color: rgba(143, 188, 143, 0.45); color: var(--accent); }
+.badge.effort { border-color: rgba(216, 181, 109, 0.42); color: var(--warn); }
 .detail { padding: 14px 18px 18px; }
 .detail h2 { margin: 0 0 4px; font-size: 21px; letter-spacing: -0.02em; }
 .detail .preview, .session-details .preview { color: var(--muted); white-space: pre-wrap; margin: 10px 0 16px; }
