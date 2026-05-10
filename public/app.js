@@ -1295,6 +1295,7 @@ function openImageLightbox(src, alt = '') {
   lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
   lightboxImage.src = src;
   lightboxImage.alt = alt;
+  lightboxImage.ondragstart = () => false;
   imageLightbox.hidden = false;
   updateLightboxTransform();
 }
@@ -1343,6 +1344,8 @@ function bindImageLightbox() {
     });
   }, { passive: false });
   lightboxImage.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     lightboxState.dragging = true;
     lightboxState.startX = event.clientX;
     lightboxState.startY = event.clientY;
@@ -1352,11 +1355,15 @@ function bindImageLightbox() {
   });
   lightboxImage.addEventListener('pointermove', (event) => {
     if (!lightboxState.dragging) return;
+    event.preventDefault();
+    event.stopPropagation();
     lightboxState.x = lightboxState.originX + event.clientX - lightboxState.startX;
     lightboxState.y = lightboxState.originY + event.clientY - lightboxState.startY;
     updateLightboxTransform();
   });
-  lightboxImage.addEventListener('pointerup', () => {
+  lightboxImage.addEventListener('pointerup', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     lightboxState.dragging = false;
   });
   lightboxImage.addEventListener('dblclick', resetLightbox);
