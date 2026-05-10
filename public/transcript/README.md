@@ -2,7 +2,7 @@
 
 This folder owns the browser-side transcript rendering extension points for Codex Control.
 
-The server still owns filesystem-aware normalization in `src/server.mjs`. Anything that needs local file access, media IDs, or path resolution should be normalized there before it reaches this browser code.
+The server still owns filesystem-aware normalization in `src/transcript/`. Anything that needs local file access, media IDs, or path resolution should be normalized there before it reaches this browser code.
 
 ## Main Files
 
@@ -151,7 +151,7 @@ addParser(itemParsers, exampleItemParser);
 
 Keep this boundary intact:
 
-- Server: detect raw Codex protocol shapes, resolve local files, create `/api/media/:id` URLs, truncate raw JSON, and normalize data into stable item/block fields.
+- Server: detect raw Codex protocol shapes in `src/transcript/`, resolve local files, create `/api/media/:id` URLs, truncate raw JSON, and normalize data into stable item/block fields.
 - Client parsers: choose markup for already-normalized item/block shapes.
 - `public/app.js`: orchestrate transcript rendering, detail refresh, lightbox state, copy-button binding, and other page-level behavior.
 

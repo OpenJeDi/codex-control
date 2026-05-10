@@ -1,12 +1,14 @@
 import { execFile, spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, statSync, watch } from 'node:fs';
+import { existsSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { createTranscriptMediaHelpers } from './transcript/media.js';
+import { createTranscriptNormalizer, textFromContent, truncate } from './transcript/normalize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -17,6 +19,13 @@ const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
 const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
+const transcriptMedia = createTranscriptMediaHelpers({ mediaById });
+const { mediaFromLocalFilePath } = transcriptMedia;
+const transcriptNormalizer = createTranscriptNormalizer({
+  ...transcriptMedia,
+  extractModelFromPayload,
+  extractEffortFromPayload,
+});
 
 class CodexAppServer {
   constructor() {
@@ -225,7 +234,7 @@ class CodexAppServer {
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
+      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
       queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(normalizeQueuedMessage),
       permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
@@ -896,21 +905,6 @@ function parseWorktreeList(output) {
   });
 }
 
-function normalizeTranscriptTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
-  return {
-    id: turn.id,
-    status: turn.status,
-    error: turn.error,
-    startedAt: turn.startedAt,
-    completedAt: turn.completedAt,
-    durationMs: turn.durationMs,
-    model: extractModelFromPayload(turn),
-    effort: extractEffortFromPayload(turn),
-    steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map((item) => normalizeTranscriptItem(item, cwd)), attachments),
-  };
-}
-
 function normalizeQueuedMessage(message) {
   return {
     turnId: message.turnId,
@@ -918,19 +912,6 @@ function normalizeQueuedMessage(message) {
     attachments: attachmentsFromInput(message.input),
     createdAt: message.createdAt,
   };
-}
-
-function mergeTurnAttachments(items, attachments = []) {
-  if (!attachments.length) return items;
-  const userIndex = items.findIndex((item) => item.type === 'userMessage');
-  if (userIndex === -1) return items;
-  const next = [...items];
-  const userItem = next[userIndex];
-  const existingParts = Array.isArray(userItem.parts) ? userItem.parts : [];
-  const existingSrcs = new Set(existingParts.map((part) => part.src).filter(Boolean));
-  const attachmentParts = attachments.filter((attachment) => !existingSrcs.has(attachment.src));
-  next[userIndex] = { ...userItem, parts: [...existingParts, ...attachmentParts] };
-  return next;
 }
 
 function attachmentsFromInput(input = []) {
@@ -1097,382 +1078,6 @@ function normalizeModelValue(value) {
   if (!text) return '';
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
   return text;
-}
-
-function textFromContent(content) {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((part) => part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value)
-    .map((part) => part?.text ?? part?.value ?? '')
-    .filter(Boolean)
-    .join('\n');
-}
-
-function mediaFromDataUrl(dataUrl) {
-  const match = String(dataUrl ?? '').match(/^data:([^;,]+);base64,(.+)$/s);
-  if (!match) return null;
-  const [, contentType, encoded] = match;
-  const id = createHash('sha256').update(dataUrl).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, data: Buffer.from(encoded, 'base64') });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
-}
-
-function mediaFromLocalImagePath(filePath) {
-  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  const ext = path.extname(target).toLowerCase();
-  const contentType = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-  }[ext];
-  if (!contentType) return null;
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
-}
-
-function localFileContentType(filePath) {
-  const ext = path.extname(String(filePath ?? '')).toLowerCase();
-  return {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.m4v': 'video/mp4',
-    '.cpp': 'text/plain; charset=utf-8',
-    '.h': 'text/plain; charset=utf-8',
-    '.hpp': 'text/plain; charset=utf-8',
-    '.cs': 'text/plain; charset=utf-8',
-    '.js': 'text/plain; charset=utf-8',
-    '.mjs': 'text/plain; charset=utf-8',
-    '.ts': 'text/plain; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.md': 'text/markdown; charset=utf-8',
-    '.txt': 'text/plain; charset=utf-8',
-    '.log': 'text/plain; charset=utf-8',
-    '.diff': 'text/plain; charset=utf-8',
-    '.patch': 'text/plain; charset=utf-8',
-    '.pdf': 'application/pdf',
-  }[ext] ?? 'application/octet-stream';
-}
-
-function mediaFromLocalFilePath(filePath) {
-  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  try { if (!statSync(target).isFile()) return null; } catch { return null; }
-  const contentType = localFileContentType(target);
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
-  return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
-}
-
-function rewriteMarkdownLocalFileLinks(text) {
-  return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
-    const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
-    return media ? `![${alt}](${media.src}?kind=${kind})` : match;
-  }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
-    return media ? `[${label}](${media.src})` : match;
-  });
-}
-
-function rewriteLocalFileReferences(text, cwd = '') {
-  return String(text ?? '').split(/(```[\s\S]*?```)/g).map((segment) => {
-    if (segment.startsWith('```')) return segment;
-    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment), cwd), cwd);
-  }).join('');
-}
-
-function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
-  return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
-    return media ? `[${rawPath}](${media.src})` : match;
-  });
-}
-
-function resolveMentionedFilePath(rawPath, cwd = '') {
-  const cleaned = String(rawPath ?? '').trim().replace(/^[\'"`(<\[]+|[\'"`)>\].,;:]+$/g, '');
-  if (!cleaned) return '';
-  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
-  if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
-  if (!/[\\/]/.test(cleaned)) return '';
-  const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
-  return existsSync(resolved) ? resolved : '';
-}
-
-function rewriteBareLocalFilePaths(text, cwd = '') {
-  const source = String(text ?? '');
-  return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
-    return media ? `${prefix}[${rawPath}](${media.src})` : match;
-  });
-}
-
-function imageGenerationContentTypeFromSource(source) {
-  const clean = String(source ?? '').split('?')[0].toLowerCase();
-  const ext = path.extname(clean).replace('.', '');
-  return {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    bmp: 'image/bmp',
-    svg: 'image/svg+xml',
-  }[ext] || null;
-}
-
-function mediaFromImageGenerationSource(candidate, cwd = '') {
-  const candidateText = String(candidate ?? '').trim();
-  if (!candidateText) return null;
-
-  if (candidateText.startsWith('data:')) {
-    return mediaFromDataUrl(candidateText);
-  }
-
-  const localMedia = mediaFromLocalFilePath(candidateText);
-  if (localMedia) return localMedia;
-
-  const resolved = resolveMentionedFilePath(candidateText, cwd);
-  const resolvedMedia = resolved ? mediaFromLocalFilePath(resolved) : null;
-  if (resolvedMedia) return resolvedMedia;
-
-  if (/^(?:https?:\/\/|\/api\/media\/|\/api\/media\/[a-f0-9]+$|\/)/i.test(candidateText)) {
-    return {
-      type: 'image',
-      src: candidateText,
-      contentType: imageGenerationContentTypeFromSource(candidateText) || 'image/png',
-    };
-  }
-
-  return null;
-}
-
-function mediaFromImageGenerationCandidate(candidate, cwd = '') {
-  if (!candidate) return null;
-
-  if (Array.isArray(candidate)) {
-    for (const item of candidate) {
-      const media = mediaFromImageGenerationCandidate(item, cwd);
-      if (media) return media;
-    }
-    return null;
-  }
-
-  if (typeof candidate === 'string') {
-    return mediaFromImageGenerationSource(candidate, cwd);
-  }
-
-  if (typeof candidate !== 'object') {
-    return null;
-  }
-
-  const candidates = [
-    candidate.url,
-    candidate.imageUrl,
-    candidate.image_url,
-    candidate.src,
-    candidate.path,
-    candidate.filePath,
-    candidate.file_path,
-    candidate.media,
-    candidate.result,
-    candidate.output,
-    candidate.data,
-    candidate.uri,
-  ];
-
-  for (const next of candidates) {
-    const media = mediaFromImageGenerationCandidate(next, cwd);
-    if (media) return media;
-  }
-
-  return null;
-}
-
-function collectImageGenerationCandidates(item) {
-  if (!item || typeof item !== 'object') return [];
-
-  const keys = [
-    'images',
-    'image',
-    'imageUrl',
-    'image_url',
-    'output',
-    'outputs',
-    'result',
-    'results',
-    'paths',
-    'path',
-    'files',
-    'file',
-    'filePath',
-    'file_path',
-    'src',
-    'uri',
-    'url',
-    'prompt',
-  ];
-
-  const nestedKeys = ['args', 'input', 'payload', 'params', 'parameters'];
-  const collected = [];
-
-  for (const key of keys) {
-    const value = item[key];
-    if (!value) continue;
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        if (typeof entry === 'string' || typeof entry === 'object') {
-          collected.push(entry);
-        }
-      }
-      continue;
-    }
-    if (typeof value === 'string' || typeof value === 'object') {
-      collected.push(value);
-    }
-  }
-
-  for (const key of nestedKeys) {
-    const value = item[key];
-    if (!value || typeof value !== 'object') continue;
-    for (const nestedKey of keys) {
-      const nestedValue = value[nestedKey];
-      if (!nestedValue) continue;
-      if (Array.isArray(nestedValue)) {
-        for (const entry of nestedValue) {
-          if (typeof entry === 'string' || typeof entry === 'object') {
-            collected.push(entry);
-          }
-        }
-        continue;
-      }
-      if (typeof nestedValue === 'string' || typeof nestedValue === 'object') {
-        collected.push(nestedValue);
-      }
-    }
-  }
-
-  return collected;
-}
-
-function isImageGenerationItem(item) {
-  if (!item || typeof item !== 'object') return false;
-  const type = String(item.type ?? '').trim().toLowerCase();
-  const kind = String(item.kind ?? '').trim().toLowerCase();
-  const tool = String(item.tool ?? item.name ?? item.toolName ?? '').trim().toLowerCase();
-  return [type, kind, tool].includes('imagegeneration')
-    || ['image_generation', 'imagegenerate', 'imagetool'].includes(tool)
-    || type.startsWith('imagegeneration');
-}
-
-function normalizeImageGeneration(item, cwd = '') {
-  if (!isImageGenerationItem(item)) return null;
-
-  const raw = truncate(JSON.stringify(item, null, 2), 6000);
-  const candidates = collectImageGenerationCandidates(item);
-  const seen = new Set();
-  const images = [];
-
-  for (const candidate of candidates) {
-    const media = mediaFromImageGenerationCandidate(candidate, cwd);
-    if (!media || !media.src) continue;
-    const key = `${media.src}|${media.contentType || ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    images.push({
-      src: media.src,
-      contentType: media.contentType || 'image/png',
-      filename: media.filename || '',
-      alt: media.filename || '',
-    });
-  }
-
-  if (!images.length && !raw && !String(item.prompt || '').trim()) return null;
-
-  const prompt = [
-    item.prompt,
-    item.input?.prompt,
-    item.parameters?.prompt,
-    item.task?.prompt,
-  ].filter(Boolean).map((value) => String(value).trim()).join(' | ');
-
-  return [{
-    kind: 'imageGeneration',
-    prompt,
-    raw,
-    images,
-  }];
-}
-
-function normalizeItemContentParts(content) {
-  if (!Array.isArray(content)) return [];
-  return content.map((part) => {
-    const type = String(part?.type ?? '').toLowerCase();
-    if (type === 'text' || type === 'input_text' || part?.text || part?.value) {
-      const text = part?.text ?? part?.value ?? '';
-      return text ? { type: 'text', text: truncate(text) } : null;
-    }
-    if (type === 'image' || type === 'input_image') {
-      const media = mediaFromDataUrl(part?.url ?? part?.image_url);
-      return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
-    }
-    if (type === 'localimage' || type === 'local_image') {
-      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path);
-      return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
-    }
-    return null;
-  }).filter(Boolean);
-}
-
-function truncate(value, max = 12000) {
-  const text = String(value ?? '');
-  return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
-}
-
-function normalizeTranscriptItem(item, cwd = '') {
-  const type = item.type ?? 'unknown';
-  const base = { id: item.id, type };
-
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: normalizeItemContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
-  if (type === 'commandExecution') {
-    return {
-      ...base,
-      command: item.command ?? item.cmd ?? item.argv?.join(' '),
-      status: item.status,
-      exitCode: item.exitCode,
-      output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
-    };
-  }
-  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', cwd)) };
-  const imageGeneration = normalizeImageGeneration(item, cwd);
-  if (imageGeneration) {
-    return {
-      ...base,
-      text: truncate(JSON.stringify(item, null, 2), 6000),
-      renderBlocks: imageGeneration,
-    };
-  }
-
-  const json = JSON.stringify(item, null, 2);
-  return { ...base, text: truncate(json, 6000) };
 }
 
 function includes(haystack, needle) {
