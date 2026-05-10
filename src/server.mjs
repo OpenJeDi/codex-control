@@ -320,16 +320,39 @@ class CodexAppServer {
     return result;
   }
 
+  clearStaleActiveTurn(threadId, turnId = null) {
+    this.activeTurnByThread.delete(String(threadId));
+    const params = { threadId, ...(turnId ? { turnId } : {}), status: { type: 'idle' } };
+    this.rememberStatus('turn/idle', params);
+    this.rememberEvent('turn/idle', params);
+    this.broadcast('codex-notification', { method: 'turn/idle', params });
+    this.scheduleThreadsChanged({ source: 'turn/idle', threadId });
+    setTimeout(() => this.drainQueuedTurn(threadId).catch((error) => {
+      console.warn('[codex-control] failed to start queued turn after stale active clear:', error.message);
+    }), 250);
+  }
+
   async interruptTurn(threadId) {
     await this.ready;
     const turnId = await this.activeTurnId(threadId);
-    if (!turnId) throw new Error('No active turn found for this thread.');
-    const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
-    this.activeTurnByThread.delete(String(threadId));
-    this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
-    this.rememberEvent('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
-    this.broadcast('codex-notification', { method: 'turn/interrupted', params: { threadId, turnId } });
-    return { ...result, threadId, turnId };
+    if (!turnId) {
+      this.clearStaleActiveTurn(threadId);
+      return { threadId, status: 'idle', stale: true };
+    }
+    try {
+      const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
+      this.activeTurnByThread.delete(String(threadId));
+      this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
+      this.rememberEvent('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
+      this.broadcast('codex-notification', { method: 'turn/interrupted', params: { threadId, turnId } });
+      return { ...result, threadId, turnId };
+    } catch (error) {
+      if (/no active turn/i.test(error.message)) {
+        this.clearStaleActiveTurn(threadId, turnId);
+        return { threadId, turnId, status: 'idle', stale: true };
+      }
+      throw error;
+    }
   }
 
   rememberEvent(method, params = {}) {
