@@ -280,17 +280,28 @@ class CodexAppServer {
   async steerTurn(threadId, input) {
     await this.ready;
     const turnId = await this.activeTurnId(threadId);
-    if (!turnId) throw new Error('No active turn found for this thread.');
-    const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000);
-    const text = textFromContent(input);
-    if (text) {
-      const key = String(threadId);
-      const current = this.steeredMessagesByThread.get(key) ?? [];
-      this.steeredMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+    if (!turnId) {
+      this.clearStaleActiveTurn(threadId);
+      return { threadId, status: 'idle', stale: true };
     }
-    this.rememberEvent('turn/steered', { threadId, turnId });
-    this.broadcast('codex-notification', { method: 'turn/steered', params: { threadId, turnId } });
-    return { ...result, threadId, turnId };
+    try {
+      const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000);
+      const text = textFromContent(input);
+      if (text) {
+        const key = String(threadId);
+        const current = this.steeredMessagesByThread.get(key) ?? [];
+        this.steeredMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+      }
+      this.rememberEvent('turn/steered', { threadId, turnId });
+      this.broadcast('codex-notification', { method: 'turn/steered', params: { threadId, turnId } });
+      return { ...result, threadId, turnId };
+    } catch (error) {
+      if (/no active turn/i.test(error.message)) {
+        this.clearStaleActiveTurn(threadId, turnId);
+        return { threadId, turnId, status: 'idle', stale: true };
+      }
+      throw error;
+    }
   }
 
   async setThreadName(threadId, name) {
