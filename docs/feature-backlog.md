@@ -6,7 +6,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Show instruction sources and system-prompt-ish context.
 - Editable developer instructions for new sessions.
 - Codex config read/write with diff + confirm.
-- Model/provider/reasoning/sandbox defaults, including durable permission defaults that survive Codex Control server restarts.
+- Model/provider/reasoning/sandbox defaults. Implemented for permissions: browser-local global defaults plus per-session overrides survive Codex Control server restarts.
 - Account and rate-limit visibility.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.

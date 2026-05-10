@@ -56,6 +56,8 @@ const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
+const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
+const PERMISSION_THREADS_KEY = 'codex-control.permissionThreads';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const truncate = (value, max = 12000) => {
@@ -351,6 +353,105 @@ function saveSelectedRepo(repo) {
 function saveCustomRepos(repos) {
   localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
+function readJsonLocalStorage(key, fallback) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function permissionDefaults() {
+  return normalizePermissionPreference(readJsonLocalStorage(PERMISSION_DEFAULTS_KEY, {}));
+}
+
+function permissionThreadPrefs() {
+  return readJsonLocalStorage(PERMISSION_THREADS_KEY, {});
+}
+
+function permissionForThread(threadId) {
+  const prefs = permissionThreadPrefs();
+  return Object.prototype.hasOwnProperty.call(prefs, String(threadId)) ? normalizePermissionPreference(prefs[String(threadId)]) : null;
+}
+
+function normalizePermissionPreference(value = {}) {
+  const sandboxPolicy = String(typeof value.sandboxPolicy === 'object' ? value.sandboxPolicy?.type : value.sandboxPolicy ?? '').trim();
+  const approvalPolicy = String(value.approvalPolicy ?? '').trim();
+  return {
+    sandboxPolicy: ['readOnly', 'workspaceWrite', 'dangerFullAccess'].includes(sandboxPolicy) ? sandboxPolicy : '',
+    approvalPolicy: ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy) ? approvalPolicy : '',
+    networkAccess: Boolean(value.networkAccess),
+  };
+}
+
+function preferenceFromServerSettings(settings = {}) {
+  return normalizePermissionPreference({
+    sandboxPolicy: settings.sandboxPolicy?.type || '',
+    approvalPolicy: settings.approvalPolicy || '',
+    networkAccess: Boolean(settings.sandboxPolicy?.networkAccess),
+  });
+}
+
+function effectivePermissionPreference(threadId = '', serverSettings = {}) {
+  return {
+    ...permissionDefaults(),
+    ...preferenceFromServerSettings(serverSettings),
+    ...(threadId ? permissionForThread(threadId) ?? {} : {}),
+  };
+}
+
+function preferenceFromControls(root) {
+  return normalizePermissionPreference({
+    sandboxPolicy: root?.querySelector('[name="sandboxPolicy"]')?.value || '',
+    approvalPolicy: root?.querySelector('[name="approvalPolicy"]')?.value || '',
+    networkAccess: Boolean(root?.querySelector('[name="networkAccess"]')?.checked),
+  });
+}
+
+function applyPermissionPreference(root, pref = permissionDefaults()) {
+  const normalized = normalizePermissionPreference(pref);
+  const sandbox = root?.querySelector('[name="sandboxPolicy"]');
+  const approval = root?.querySelector('[name="approvalPolicy"]');
+  const network = root?.querySelector('[name="networkAccess"]');
+  if (sandbox) sandbox.value = normalized.sandboxPolicy;
+  if (approval) approval.value = normalized.approvalPolicy;
+  if (network) network.checked = normalized.networkAccess;
+}
+
+function savePermissionDefaults(pref) {
+  localStorage.setItem(PERMISSION_DEFAULTS_KEY, JSON.stringify(normalizePermissionPreference(pref)));
+}
+
+function saveThreadPermission(threadId, pref) {
+  if (!threadId) return;
+  const current = permissionThreadPrefs();
+  current[String(threadId)] = normalizePermissionPreference(pref);
+  localStorage.setItem(PERMISSION_THREADS_KEY, JSON.stringify(current));
+}
+
+function permissionPayload(pref = permissionDefaults()) {
+  const normalized = normalizePermissionPreference(pref);
+  return {
+    sandboxPolicy: normalized.sandboxPolicy,
+    approvalPolicy: normalized.approvalPolicy,
+    networkAccess: normalized.networkAccess,
+  };
+}
+
+function bindPermissionPreferenceControls(root, threadId = '') {
+  const bindingKey = threadId || 'global';
+  root?.querySelectorAll('[name="sandboxPolicy"], [name="approvalPolicy"], [name="networkAccess"]').forEach((control) => {
+    if (control.dataset.permissionBinding === bindingKey) return;
+    control.dataset.permissionBinding = bindingKey;
+    control.addEventListener('change', () => {
+      const pref = preferenceFromControls(root);
+      savePermissionDefaults(pref);
+      if (threadId) saveThreadPermission(threadId, pref);
+    });
+  });
+}
+
 function normalizeRepoInput(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -546,6 +647,8 @@ async function loadSessions({ quiet = false } = {}) {
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const pref = preferenceFromControls(form);
+  savePermissionDefaults(pref);
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
   if (!cwd) return window.alert('Choose a worktree first.');
@@ -560,6 +663,7 @@ async function startSessionFromSelectedWorktree(event) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
+    if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
@@ -642,7 +746,10 @@ async function createFeatureWorktree(event) {
     await loadNewSessionWorktrees(createdPath);
     newWorktreeSelect.value = createdPath;
     newSessionDialog.close();
-    const started = await jsonApi('/api/threads', { cwd: createdPath });
+    const pref = preferenceFromControls(newSessionForm);
+    savePermissionDefaults(pref);
+    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref) });
+    if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
     if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
@@ -688,6 +795,7 @@ function syncNewSessionRepoOptions() {
 async function openNewSessionDialog() {
   syncNewSessionRepoOptions();
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
+  applyPermissionPreference(newSessionForm, permissionDefaults());
   newSessionDialog.showModal();
   await loadNewSessionWorktrees();
 }
@@ -822,6 +930,7 @@ async function loadDetail(id, { quiet = false } = {}) {
       restorePromptDraft(promptForm, draftPrompt, draftFiles);
       restorePromptFocus(promptForm, draftSelection);
     }
+    bindPermissionPreferenceControls(promptForm, id);
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => toggleArchiveThread(id, data.thread));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
@@ -924,7 +1033,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
           <span>+</span>
         </label>
         <span class="attachment-status" aria-live="polite"></span>
-        ${renderPermissionControls(permissionSettings)}
+        ${renderPermissionControls(effectivePermissionPreference(thread.id, permissionSettings))}
         <span class="prompt-spacer"></span>
         ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
@@ -943,9 +1052,10 @@ function checkedAttribute(value) {
 }
 
 function renderPermissionControls(settings = {}) {
-  const sandbox = settings.sandboxPolicy?.type || '';
-  const approval = settings.approvalPolicy || '';
-  const network = Boolean(settings.sandboxPolicy?.networkAccess);
+  const normalized = normalizePermissionPreference(settings);
+  const sandbox = normalized.sandboxPolicy;
+  const approval = normalized.approvalPolicy;
+  const network = normalized.networkAccess;
   return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
     <select name="sandboxPolicy" aria-label="Sandbox policy">
       <option value=""${selectedAttribute(sandbox, '')}>config sandbox</option>
@@ -1076,6 +1186,9 @@ async function toggleArchiveThread(id, thread = {}) {
 
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   const form = detailEl.querySelector('#promptForm');
+  const pref = preferenceFromControls(form);
+  savePermissionDefaults(pref);
+  saveThreadPermission(id, pref);
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -1125,6 +1238,9 @@ async function submitPrompt(event, id) {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
+  const pref = preferenceFromControls(form);
+  savePermissionDefaults(pref);
+  saveThreadPermission(id, pref);
   const formData = new FormData(form);
   const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
@@ -1737,6 +1853,7 @@ repoFilter.addEventListener('change', () => {
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
+bindPermissionPreferenceControls(newSessionForm);
 addRepoButton.addEventListener('click', openAddRepoDialog);
 addRepoForm.addEventListener('submit', addRepository);
 repoUrlInput.addEventListener('input', updateRepoPreview);
