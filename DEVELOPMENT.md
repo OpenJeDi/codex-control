@@ -23,6 +23,10 @@ The restart helper stops existing `node src/server.mjs` processes, starts the se
 
 On Windows, set `CODEX_CONTROL_RESTART_TASK` to start an existing Scheduled Task instead of launching `node src/server.mjs` directly.
 
+## Operational Gotchas
+
+- If sessions fail before the app receives useful output, check external account state before debugging the UI or server. Exhausted Codex/OpenAI credits, quota limits, expired auth, or model access changes can present as local app hangs or startup failures.
+
 ## Checks
 
 Run focused checks before committing code changes:
