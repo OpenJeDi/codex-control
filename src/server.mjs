@@ -1853,7 +1853,7 @@ function turnOverridesFromPayload(payload = {}) {
   if (model) overrides.model = model;
 
   const effort = String(payload.effort ?? '').trim().toLowerCase();
-  if (['low', 'medium', 'high', 'xhigh'].includes(effort)) {
+  if (['minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) {
     overrides.effort = effort;
   }
 

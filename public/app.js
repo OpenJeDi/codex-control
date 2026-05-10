@@ -76,7 +76,7 @@ const PERMISSION_THREADS_KEY = 'codex-control.permissionThreads';
 const MODEL_DEFAULTS_KEY = 'codex-control.modelDefaults';
 const MODEL_THREADS_KEY = 'codex-control.modelThreads';
 const MODEL_OPTIONS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2'];
-const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'];
+const EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 const PERMISSION_PRESETS = [
   { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
   { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
@@ -706,6 +706,20 @@ function modelPreferenceFromControls(root) {
   });
 }
 
+function appliedModelPreferenceFromControls(root) {
+  return normalizeModelPreference({
+    model: root?.querySelector('[data-setting-kind="model"]')?.value || root?.querySelector('[name="model"]')?.value || '',
+    effort: root?.querySelector('[data-setting-kind="effort"]')?.value || root?.querySelector('[name="effort"]')?.value || '',
+  });
+}
+
+function applyVisibleModelToFormData(formData, root) {
+  const applied = appliedModelPreferenceFromControls(root);
+  if (applied.model) formData.set('model', applied.model);
+  if (applied.effort) formData.set('effort', applied.effort);
+  return applied;
+}
+
 function applyModelPreference(root, pref = modelDefaults()) {
   const normalized = normalizeModelPreference(pref);
   const config = configModelPreference();
@@ -1124,6 +1138,7 @@ async function startSessionFromSelectedWorktree(event) {
   savePermissionDefaults(pref);
   saveModelDefaults(modelPref);
   const formData = new FormData(form);
+  const appliedModelPref = applyVisibleModelToFormData(formData, form);
   const cwd = newWorktreeSelect.value;
   const sessionName = newSessionNameInput.value.trim();
   if (cwd === '__chat__') formData.delete('cwd');
@@ -1144,7 +1159,7 @@ async function startSessionFromSelectedWorktree(event) {
       return json;
     });
     if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
-    if (data.thread?.id) saveThreadModel(data.thread.id, modelPref);
+    if (data.thread?.id) saveThreadModel(data.thread.id, modelPref.model || modelPref.effort ? modelPref : appliedModelPref);
     if (data.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(data.thread.id)}/name`, { name: sessionName });
     form.reset();
     newSessionDialog.close();
@@ -1236,11 +1251,12 @@ async function createFeatureWorktree(event) {
     newSessionDialog.close();
     const pref = preferenceFromControls(newSessionForm);
     const modelPref = modelPreferenceFromControls(newSessionForm);
+    const appliedModelPref = appliedModelPreferenceFromControls(newSessionForm);
     savePermissionDefaults(pref);
     saveModelDefaults(modelPref);
-    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(modelPref) });
+    const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(appliedModelPref) });
     if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
-    if (started.thread?.id) saveThreadModel(started.thread.id, modelPref);
+    if (started.thread?.id) saveThreadModel(started.thread.id, modelPref.model || modelPref.effort ? modelPref : appliedModelPref);
     if (started.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(started.thread.id)}/name`, { name: sessionName });
     if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
@@ -1863,6 +1879,7 @@ async function submitPrompt(event, id) {
   saveModelDefaults(modelPref);
   saveThreadModel(id, modelPref);
   const formData = new FormData(form);
+  applyVisibleModelToFormData(formData, form);
   const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
   submit.textContent = 'Sending...';
