@@ -10,6 +10,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Account and rate-limit visibility, including explicit credit-exhausted/account-blocked states when a session cannot continue.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
+- Repository setup flow: actually clone a repo into the expected local worktree structure, then create/select the first lane worktree. Current Add repository only adds a repo URL/owner-name to the browser-local picker and assumes the local repo/worktrees already exist.
 - Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
 - Richer live streaming / follow view.
 
