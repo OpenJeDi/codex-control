@@ -80,7 +80,7 @@ const truncate = (value, max = 12000) => {
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
-const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
+const compactPath = (value) => String(value ?? '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
 const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);
@@ -959,8 +959,14 @@ function renderRuntimeDiagnostics(data) {
       ])}
       ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
         ['App root', server.rootDir || '-'],
+        ['Server platform', server.platform || '-'],
+        ['Config file', server.configPath || '-'],
         ['Codex home', server.codexHome || '-'],
         ['Node', server.node || '-'],
+      ])}
+      ${renderRuntimeCard('Worktree config', data.config?.defaultWorktreeWorkflow || 'auto-sibling', 'ok', [
+        ['Workspace roots', (data.config?.workspaceRoots || []).join('\n') || '-'],
+        ['Workflows', Object.entries(data.config?.worktreeWorkflows || {}).map(([id, item]) => `${id}: ${item.label || id}`).join('\n') || '-'],
       ])}
     </div>
     <section class="runtime-section">
@@ -1135,7 +1141,7 @@ async function createFeatureWorktree(event) {
     const created = await jsonApi('/api/worktrees', {
       sourcePath: currentWorktreePlan.sourcePath,
       branch: currentWorktreePlan.branch,
-      targetRoot: currentWorktreePlan.targetRoot,
+      targetRoot: worktreeRootInput.value.trim(),
       confirmed: true,
     });
     const createdPath = created.worktree?.path || created.targetPath;
@@ -2072,7 +2078,7 @@ function renderMarkdownBlocks(text) {
 
 function renderCodeBlockContent(code) {
   const source = String(code ?? '');
-  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+)/g;
+  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\[^\\/\s`<>()\[\]{}]+[\\/]|\/(?!\/))[^\s`<>()\[\]{}]+)/g;
   let html = '';
   let lastIndex = 0;
   for (const match of source.matchAll(pathPattern)) {

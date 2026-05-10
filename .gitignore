@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 *.log
 .codex-control/
+local-notes/
+*.local.md
+codex-control.config.json

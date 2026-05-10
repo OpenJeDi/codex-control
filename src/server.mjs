@@ -7,10 +7,12 @@ import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { hostPlatform } from './platform/index.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const publicDir = path.join(rootDir, 'public');
+const configPath = path.join(rootDir, 'codex-control.config.json');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
 const maxBodyBytes = 75 * 1024 * 1024;
@@ -47,7 +49,7 @@ class CodexAppServer {
     this.startInProgress = (async () => {
       const proc = spawn('codex', ['app-server'], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        shell: process.platform === 'win32',
+        shell: hostPlatform.spawnCodexWithShell,
       });
       this.proc = proc;
 
@@ -974,8 +976,95 @@ function threadIdFromRolloutPath(filePath) {
 }
 
 function gitArgs(cwd, args = []) {
-  return ['-c', `safe.directory=${path.win32.resolve(String(cwd ?? ''))}`, '-C', cwd, ...args];
+  return ['-c', `safe.directory=${hostPlatform.gitSafeDirectory(cwd)}`, '-C', cwd, ...args];
 }
+
+const defaultConfig = {
+  workspaceRoots: [],
+  defaultWorktreeWorkflow: 'auto-sibling',
+  worktreeWorkflows: {
+    'auto-sibling': {
+      label: 'Auto sibling worktrees',
+      branchWorktree: '{autoWorktreeRoot}/{branchName}',
+    },
+  },
+};
+
+async function appConfig() {
+  if (!existsSync(configPath)) return defaultConfig;
+  try {
+    const parsed = JSON.parse(await readFile(configPath, 'utf8'));
+    return {
+      ...defaultConfig,
+      ...parsed,
+      workspaceRoots: Array.isArray(parsed.workspaceRoots) ? parsed.workspaceRoots : defaultConfig.workspaceRoots,
+      worktreeWorkflows: {
+        ...defaultConfig.worktreeWorkflows,
+        ...(parsed.worktreeWorkflows && typeof parsed.worktreeWorkflows === 'object' ? parsed.worktreeWorkflows : {}),
+      },
+    };
+  } catch (error) {
+    console.warn('[codex-control] failed to read codex-control.config.json:', error.message);
+    return defaultConfig;
+  }
+}
+
+function branchFolderName(branch) {
+  return String(branch ?? '')
+    .replace(/[<>:"|?*\x00-\x1f]+/g, '-')
+    .replace(/^[./\\]+|[./\\]+$/g, '')
+    .replace(/[\\/]+/g, '-')
+    || 'branch';
+}
+
+function repoNameFromSourcePath(sourcePath) {
+  const sourceName = hostPlatform.basename(sourcePath);
+  const parent = hostPlatform.dirname(sourcePath);
+  const parentName = hostPlatform.basename(parent);
+  if (parentName.toLowerCase() === 'worktrees') return hostPlatform.basename(hostPlatform.dirname(parent));
+  return sourceName;
+}
+
+function renderConfigTemplate(template, context) {
+  return String(template ?? '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => context[key] ?? '');
+}
+
+function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
+  const workflowId = String(config.defaultWorktreeWorkflow || defaultConfig.defaultWorktreeWorkflow);
+  const workflow = config.worktreeWorkflows?.[workflowId] ?? defaultConfig.worktreeWorkflows['auto-sibling'];
+  const autoWorktreeRoot = repoWorktreeRoot(sourcePath);
+  const context = {
+    sourcePath,
+    sourceName: hostPlatform.basename(sourcePath),
+    sourceParent: hostPlatform.dirname(sourcePath),
+    repoName: repoNameFromSourcePath(sourcePath),
+    branchName: String(branch ?? ''),
+    branchFolder: branchFolderName(branch),
+    autoWorktreeRoot,
+    workspaceRoot: config.workspaceRoots?.[0] ?? '',
+  };
+
+  const explicitRoot = String(requestedRoot ?? '').trim();
+  if (explicitRoot) {
+    const targetRoot = hostPlatform.resolvePathFromCwd(context.sourceParent, renderConfigTemplate(explicitRoot, context));
+    return {
+      workflowId: 'custom-root',
+      workflowLabel: 'Custom root',
+      targetRoot,
+      targetPath: hostPlatform.joinPath(targetRoot, context.branchName),
+    };
+  }
+
+  const template = workflow.branchWorktree || defaultConfig.worktreeWorkflows['auto-sibling'].branchWorktree;
+  const targetPath = hostPlatform.resolvePathFromCwd(context.sourceParent, renderConfigTemplate(template, context));
+  return {
+    workflowId,
+    workflowLabel: workflow.label || workflowId,
+    targetRoot: hostPlatform.dirname(targetPath),
+    targetPath,
+  };
+}
+
 function execFileText(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { windowsHide: true, maxBuffer: 1024 * 1024 * 10, ...options }, (error, stdout, stderr) => {
@@ -1396,7 +1485,7 @@ function resolveMentionedFilePath(rawPath, cwd = '') {
   if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
   if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
   if (!/[\\/]/.test(cleaned)) return '';
-  const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
+  const resolved = hostPlatform.resolvePathFromCwd(cwd, cleaned);
   return existsSync(resolved) ? resolved : '';
 }
 
@@ -1555,13 +1644,7 @@ function assertSafeBranch(branch) {
 }
 
 function repoWorktreeRoot(sourcePath) {
-  const parsed = path.win32.parse(sourcePath);
-  const base = path.win32.basename(sourcePath);
-  const parent = path.win32.dirname(sourcePath);
-  const parentBase = path.win32.basename(parent).toLowerCase();
-  if (parentBase.endsWith('-worktrees') || parentBase === 'worktrees') return parent;
-  if (['main', 'master', 'develop'].includes(base.toLowerCase()) && parentBase === 'worktrees') return parent;
-  return path.win32.join(parent, `${base}-worktrees`);
+  return hostPlatform.defaultWorktreeRoot(sourcePath);
 }
 
 async function buildWorktreePlan(body) {
@@ -1572,22 +1655,23 @@ async function buildWorktreePlan(body) {
   if (!sourcePath) throw new Error('Choose an existing worktree as the source.');
   if (!existsSync(sourcePath)) throw new Error(`Source worktree does not exist: ${sourcePath}`);
 
-  const targetRoot = String(body.targetRoot ?? '').trim() || repoWorktreeRoot(sourcePath);
-  const targetPath = path.win32.join(targetRoot, branch);
+  const targetRoot = String(body.targetRoot ?? '').trim();
+  const config = await appConfig();
+  const target = configuredWorktreeTarget(sourcePath, branch, targetRoot, config);
+  const targetPath = target.targetPath;
   const existing = await execFileText('git', gitArgs(sourcePath, ['branch', '--list', branch]));
   const branchExists = Boolean(existing.trim());
   const args = branchExists
     ? gitArgs(sourcePath, ['worktree', 'add', targetPath, branch])
     : gitArgs(sourcePath, ['worktree', 'add', '-b', branch, targetPath]);
-  const display = branchExists
-    ? `git -C ${quoteWinArg(sourcePath)} worktree add ${quoteWinArg(targetPath)} ${quoteWinArg(branch)}`
-    : `git -C ${quoteWinArg(sourcePath)} worktree add -b ${quoteWinArg(branch)} ${quoteWinArg(targetPath)}`;
+  const display = hostPlatform.displayGitWorktreeAddCommand(sourcePath, targetPath, branch, { branchExists });
   return {
     sourcePath,
     branch,
     branchExists,
-    targetRoot,
+    targetRoot: target.targetRoot,
     targetPath,
+    workflow: { id: target.workflowId, label: target.workflowLabel },
     commands: [{ display, command: 'git', args }],
   };
 }
@@ -1666,7 +1750,7 @@ function parseMultipart(buffer, contentType) {
 }
 
 function safeFilename(name) {
-  const base = path.win32.basename(String(name ?? 'attachment')) || 'attachment';
+  const base = hostPlatform.basename(String(name ?? 'attachment')) || 'attachment';
   return base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'attachment';
 }
 
@@ -1740,7 +1824,7 @@ async function buildTurnInput(threadId, thread, reqOrPayload) {
   if (files.length) {
     const cwd = thread.cwd;
     if (!cwd) throw new Error('Thread has no cwd; cannot save attachments.');
-    const attachmentDir = path.win32.join(cwd, '.codex-control', 'attachments', safeThreadId(threadId));
+    const attachmentDir = hostPlatform.joinPath(cwd, '.codex-control', 'attachments', safeThreadId(threadId));
     await mkdir(attachmentDir, { recursive: true });
 
     for (const file of files) {
@@ -1833,9 +1917,12 @@ async function runtimeDiagnostics() {
   const gitAccess = git.gitCommonDir ? await probeDirectoryWrite(git.gitCommonDir) : { canWrite: false, reason: 'Git common directory was not found.' };
   const canCommit = Boolean(worktreeAccess.canWrite && gitAccess.canWrite);
   const recommendedWritableRoot = git.repositoryRoot || git.worktreeRoot || rootDir;
+  const config = await appConfig();
 
   return {
     server: {
+      platform: hostPlatform.family,
+      configPath,
       cwd: process.cwd(),
       rootDir,
       publicDir,
@@ -1854,8 +1941,13 @@ async function runtimeDiagnostics() {
       permissionMutationSupported: true,
       permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
     },
+    config: {
+      workspaceRoots: config.workspaceRoots,
+      defaultWorktreeWorkflow: config.defaultWorktreeWorkflow,
+      worktreeWorkflows: Object.fromEntries(Object.entries(config.worktreeWorkflows ?? {}).map(([id, workflow]) => [id, { label: workflow?.label || id }])),
+    },
     commands: {
-      restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'node\\s+src\\\\server\\.mjs|node\\s+src/server\\.mjs' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask -TaskName 'codex-control'; Start-Sleep -Seconds 3; (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:${port}/api/health').StatusCode"`,
+      restartFromCmd: hostPlatform.restartCommand({ port }),
       neededAccess: `Allow this Codex session to write: ${recommendedWritableRoot}`,
     },
   };

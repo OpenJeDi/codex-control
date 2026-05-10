@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Resolve-Path (Join-Path $PSScriptRoot '..')
+$root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $serverPattern = 'node\s+src\\server\.mjs|node\s+src/server\.mjs'
 
 Write-Host "Stopping existing Codex Control node processes..."
