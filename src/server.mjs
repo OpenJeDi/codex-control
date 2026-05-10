@@ -1062,7 +1062,7 @@ function mediaFromLocalFilePath(filePath) {
   const contentType = localFileContentType(target);
   const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
   if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
-  return { src: `/api/media/${id}`, contentType };
+  return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
 }
 
 function rewriteMarkdownLocalFileLinks(text) {
@@ -1089,6 +1089,10 @@ function compactContentParts(content) {
     if (type === 'image' || type === 'input_image') {
       const media = mediaFromDataUrl(part?.url ?? part?.image_url);
       return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
+    }
+    if (type === 'localimage' || type === 'local_image') {
+      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path);
+      return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
     }
     return null;
   }).filter(Boolean);
