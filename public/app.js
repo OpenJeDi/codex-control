@@ -10,6 +10,12 @@ const splitter = document.querySelector('#splitter');
 const collapseSidebar = document.querySelector('#collapseSidebar');
 const expandSidebar = document.querySelector('#expandSidebar');
 const newSessionButton = document.querySelector('#newSessionButton');
+const runtimeButton = document.querySelector('#runtimeButton');
+const runtimeDialog = document.querySelector('#runtimeDialog');
+const runtimeContent = document.querySelector('#runtimeContent');
+const closeRuntime = document.querySelector('#closeRuntime');
+const imageLightbox = document.querySelector('#imageLightbox');
+const lightboxImage = document.querySelector('#lightboxImage');
 const newSessionDialog = document.querySelector('#newSessionDialog');
 const newSessionForm = document.querySelector('#newSessionForm');
 const newRepoSelect = document.querySelector('#newRepoSelect');
@@ -22,19 +28,25 @@ let activeId = null;
 let debounceTimer = null;
 let detailRefreshTimer = null;
 let isDraggingSidebar = false;
+let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
+const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const truncate = (value, max = 12000) => {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}\n... truncated ...` : text;
+};
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-const busyStatusTypes = new Set(['externalactive', 'running', 'inprogress']);
+const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);
 
 function ageLabel(seconds) {
   const timestamp = Number(seconds) * 1000;
@@ -57,7 +69,8 @@ function statusLabel(thread) {
   const raw = statusType(thread);
   const normalized = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   return ({
-    notloaded: 'not loaded',
+    notloaded: 'inactive',
+    active: 'active',
     idle: 'idle',
     externalactive: 'active',
     running: 'running',
@@ -71,6 +84,136 @@ function statusLabel(thread) {
 
 function isBusyThread(thread) {
   return busyStatusTypes.has(statusClass(thread));
+}
+
+function normalizeModelValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
+  return text;
+}
+
+function modelFromValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return normalizeModelValue(value);
+  if (typeof value === 'number' || typeof value === 'bigint') return normalizeModelValue(String(value));
+  if (typeof value !== 'object') return '';
+  const candidates = [
+    value.model,
+    value.name,
+    value.id,
+    value.value,
+    value.providerModel,
+    value.currentModel,
+    value.model_name,
+    value.current_model,
+    value.provider_model,
+    value.model_id,
+    value.config?.model,
+    value.settings?.model,
+    value.metadata?.model,
+    value.provider?.model,
+    value.model?.name,
+    value.model?.id,
+    value.model?.value,
+    value.modelId,
+    value.modelName,
+  ];
+  for (const candidate of candidates) {
+    const normalized = modelFromValue(candidate);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function effortFromValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(text.toLowerCase()) ? text : '';
+  }
+  if (typeof value !== 'object') return '';
+  const candidates = [
+    value.effort,
+    value.reasoningEffort,
+    value.reasoning_effort,
+    value.thinkingLevel,
+    value.thinking_level,
+    value.config?.effort,
+    value.config?.reasoningEffort,
+    value.settings?.effort,
+    value.settings?.reasoningEffort,
+    value.metadata?.effort,
+    value.metadata?.reasoningEffort,
+    value.reasoning?.effort,
+    value.model?.reasoningEffort,
+  ];
+  for (const candidate of candidates) {
+    const effort = effortFromValue(candidate);
+    if (effort) return effort;
+  }
+  return '';
+}
+
+function effortFromThread(thread = {}, turns = []) {
+  const direct = effortFromValue(thread) || effortFromValue(thread.config) || effortFromValue(thread.settings) || effortFromValue(thread.metadata);
+  if (direct) return direct;
+  for (const turn of [...turns].reverse()) {
+    const effort = effortFromValue(turn);
+    if (effort) return effort;
+  }
+  return '';
+}
+
+function modelFromThread(thread = {}, turns = []) {
+
+  const direct = modelFromValue(thread.model)
+    || modelFromValue(thread.currentModel)
+    || modelFromValue(thread.config?.model)
+    || modelFromValue(thread.settings?.model)
+    || modelFromValue(thread.metadata?.model)
+    || modelFromValue(thread.provider?.model);
+  if (direct) return direct;
+  for (const turn of [...turns].reverse()) {
+    const model = modelFromValue(turn);
+    if (model) return model;
+  }
+  return '';
+}
+
+function inferredModelEvents(thread, turns = [], events = []) {
+  const existing = new Set(
+    (events ?? [])
+      .filter((event) => event.modelFrom || event.modelTo)
+      .map((event) => `${event.modelFrom || ''}|${event.modelTo || ''}|${event.turnId || ''}`),
+  );
+  const inferred = [];
+  const chronological = [...turns]
+    .slice()
+    .sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0));
+  let previousModel = '';
+  for (const turn of chronological) {
+    const model = modelFromValue(turn);
+    if (!model) continue;
+    if (!previousModel) {
+      previousModel = model;
+      continue;
+    }
+    if (model === previousModel) continue;
+    const key = `${previousModel}|${model}|${turn.id || ''}`;
+    if (!existing.has(key)) {
+      inferred.push({
+        at: Number(turn.startedAt) || Date.now(),
+        method: 'turn/model/changed',
+        turnId: turn.id || null,
+        message: `Model changed: ${previousModel || 'unknown'} -> ${model}`,
+        modelFrom: previousModel,
+        modelTo: model,
+      });
+    }
+    previousModel = model;
+  }
+  return inferred;
 }
 
 function isNearBottom(el, threshold = 220) {
@@ -94,6 +237,23 @@ function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell
   const shouldShowButton = canScroll && !atBottom;
   button.hidden = !shouldShowButton;
   button.disabled = !shouldShowButton;
+}
+
+function captureOpenTurnDetails() {
+  const open = new Set();
+  detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
+    const details = turn.querySelector('.turn-details');
+    if (details?.open) open.add(turn.dataset.turnId || String(index));
+  });
+  return open;
+}
+
+function restoreOpenTurnDetails(open) {
+  if (!open?.size) return;
+  detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
+    const details = turn.querySelector('.turn-details');
+    if (details && open.has(turn.dataset.turnId || String(index))) details.open = true;
+  });
 }
 
 function bindDetailScrollControls() {
@@ -123,6 +283,16 @@ function customRepos() {
   }
 }
 
+function savedSelectedRepo() {
+  return localStorage.getItem(SELECTED_REPO_KEY) || '';
+}
+
+function saveSelectedRepo(repo) {
+  const value = String(repo ?? '').trim();
+  if (value) localStorage.setItem(SELECTED_REPO_KEY, value);
+  else localStorage.removeItem(SELECTED_REPO_KEY);
+}
+
 function saveCustomRepos(repos) {
   localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
@@ -135,6 +305,7 @@ function paramsFromForm() {
     const trimmed = String(value).trim();
     if (trimmed) params.set(key, trimmed);
   }
+  if (!params.has('repo') && savedSelectedRepo()) params.set('repo', savedSelectedRepo());
   if (filters.archived.checked) params.set('archived', '1');
   params.set('limit', '200');
   return params;
@@ -142,7 +313,13 @@ function paramsFromForm() {
 
 async function api(path, options = {}) {
   const res = await fetch(path, { cache: 'no-store', ...options });
-  const json = await res.json();
+  const text = await res.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { error: text || res.statusText };
+  }
   if (!res.ok) throw new Error(json.error || res.statusText);
   return json;
 }
@@ -162,6 +339,89 @@ async function loadHealth() {
   } catch (error) {
     statusEl.textContent = `Codex unavailable: ${error.message}`;
   }
+}
+
+async function openRuntimeDialog() {
+  runtimeDialog.showModal();
+  runtimeContent.innerHTML = '<div class="empty">Loading runtime diagnostics...</div>';
+  try {
+    runtimeContent.innerHTML = renderRuntimeDiagnostics(await api('/api/runtime'));
+    bindRuntimeCopyButtons();
+  } catch (error) {
+    runtimeContent.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderRuntimeDiagnostics(data) {
+  const access = data.access ?? {};
+  const git = data.git ?? {};
+  const server = data.server ?? {};
+  const commands = data.commands ?? {};
+  const gitStatus = String(git.status ?? '').trim();
+  return `
+    <div class="runtime-grid">
+      ${renderRuntimeCard('Agent session permissions', access.currentSessionCanChangePermissions ? 'mutable' : 'fixed', access.currentSessionCanChangePermissions ? 'ok' : 'warn', [
+        ['Future turn overrides', access.permissionMutationSupported ? 'supported' : 'not exposed'],
+        ['Reason', access.permissionMutationReason || 'unknown'],
+        ['Needed writable root', access.recommendedWritableRoot || '-'],
+      ])}
+      ${renderRuntimeCard('Server commit capability', access.canCommit ? 'ready' : 'blocked', access.canCommit ? 'ok' : 'bad', [
+        ['Server worktree write', access.worktree?.canWrite ? 'yes' : `no: ${access.worktree?.reason || 'unknown'}`],
+        ['Server Git metadata write', access.gitMetadata?.canWrite ? 'yes' : `no: ${access.gitMetadata?.reason || 'unknown'}`],
+      ])}
+      ${renderRuntimeCard('Git context', git.branch || 'unknown branch', git.error ? 'bad' : 'ok', [
+        ['Worktree', git.worktreeRoot || '-'],
+        ['Repo root', git.repositoryRoot || '-'],
+        ['Git metadata', git.gitCommonDir || '-'],
+      ])}
+      ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
+        ['App root', server.rootDir || '-'],
+        ['Codex home', server.codexHome || '-'],
+        ['Node', server.node || '-'],
+      ])}
+    </div>
+    <section class="runtime-section">
+      <div class="runtime-section-head">
+        <strong>What to grant for this session</strong>
+        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.neededAccess || '')}">Copy</button>
+      </div>
+      <pre>${escapeHtml(commands.neededAccess || 'No access recommendation available.')}</pre>
+    </section>
+    <section class="runtime-section">
+      <div class="runtime-section-head">
+        <strong>Restart command from cmd.exe</strong>
+        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.restartFromCmd || '')}">Copy</button>
+      </div>
+      <pre>${escapeHtml(commands.restartFromCmd || 'No restart command available.')}</pre>
+    </section>
+    ${gitStatus ? `<section class="runtime-section"><strong>Git status</strong><pre>${escapeHtml(gitStatus)}</pre></section>` : ''}
+  `;
+}
+
+function renderRuntimeCard(title, state, tone, rows) {
+  return `<section class="runtime-card ${escapeHtml(tone)}">
+    <div class="runtime-card-head">
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(state)}</span>
+    </div>
+    <dl>
+      ${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}
+    </dl>
+  </section>`;
+}
+
+function bindRuntimeCopyButtons() {
+  runtimeContent.querySelectorAll('.runtime-copy').forEach((button) => {
+    button.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy || '');
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+      } catch {
+        window.alert('Could not copy text.');
+      }
+    };
+  });
 }
 
 async function loadSessions({ quiet = false } = {}) {
@@ -236,7 +496,7 @@ async function createFeatureWorktree() {
 }
 
 function updateRepoOptions(repos) {
-  const previous = repoFilter.value;
+  const previous = repoFilter.value || savedSelectedRepo();
   const seen = new Set();
   const options = ['<option value="">all repos</option>'];
 
@@ -246,10 +506,10 @@ function updateRepoOptions(repos) {
     options.push(`<option value="${escapeHtml(repo.value)}"${selected}>${escapeHtml(displayRepo(repo.value))} (${repo.count})</option>`);
   }
 
-  for (const repo of customRepos()) {
+  for (const repo of [...customRepos(), savedSelectedRepo()].filter(Boolean)) {
     if (seen.has(repo)) continue;
     const selected = repo === previous ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (custom)</option>`);
+    options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (saved)</option>`);
   }
 
   options.push('<option value="__add_repo__">+ Add repo...</option>');
@@ -367,7 +627,19 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
-  const shouldContinueFollowing = quiet && id === previousId && isNearBottom(previousScroller);
+  const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
+  const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
+  const previousForm = detailEl.querySelector('#promptForm');
+  const preservePromptForm = quiet && id === previousId && previousForm;
+  const draftPrompt = quiet && id === previousId ? previousForm?.elements?.prompt?.value ?? '' : '';
+  const draftFiles = quiet && id === previousId ? [...(previousForm?.elements?.files?.files ?? [])] : [];
+  const previousTextarea = previousForm?.querySelector('textarea[name="prompt"]');
+  const restoreComposerFocus = quiet && id === previousId && document.activeElement === previousTextarea;
+  const draftSelection = restoreComposerFocus ? {
+    start: previousTextarea.selectionStart,
+    end: previousTextarea.selectionEnd,
+    direction: previousTextarea.selectionDirection,
+  } : null;
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
@@ -377,12 +649,26 @@ async function loadDetail(id, { quiet = false } = {}) {
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     detailEl.className = 'detail-host';
-    detailEl.innerHTML = renderDetail(data);
-    detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
+    const rendered = renderDetail(data);
+    const patched = preservePromptForm && patchDetailPreservingComposer(rendered, data.thread);
+    let promptForm = patched ? previousForm : null;
+    if (!patched) {
+      detailEl.innerHTML = rendered;
+      promptForm = detailEl.querySelector('#promptForm');
+      promptForm?.addEventListener('submit', (event) => submitPrompt(event, id));
+      bindPromptKeyboard(promptForm);
+      bindPromptPaste(promptForm);
+      restorePromptDraft(promptForm, draftPrompt, draftFiles);
+      restorePromptFocus(promptForm, draftSelection);
+    }
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => archiveThread(id));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
-    detailEl.querySelector('[data-action=steer-turn]')?.addEventListener('click', () => steerTurn(id));
+    detailEl.querySelectorAll('[data-action=steer-turn]').forEach((button) => { button.onclick = () => steerTurn(id, button); });
+    bindQueuedMessageControls(id);
+    restoreOpenTurnDetails(openTurnDetails);
+    bindCodeCopyControls();
+    bindSessionImageViewer();
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -396,35 +682,73 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
 }
 
-function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
+function patchDetailPreservingComposer(renderedHtml, thread) {
+  const currentShell = detailEl.querySelector('.detail-shell');
+  const currentForm = currentShell?.querySelector('#promptForm');
+  if (!currentShell || !currentForm) return false;
+
+  const container = document.createElement('div');
+  container.innerHTML = renderedHtml;
+  const nextShell = container.querySelector('.detail-shell');
+  if (!nextShell) return false;
+
+  for (const selector of ['.session-header', '.detail', '.jump-bottom']) {
+    const current = currentShell.querySelector(selector);
+    const next = nextShell.querySelector(selector);
+    if (current && next) current.replaceWith(next);
+  }
+
+  const currentQueue = currentShell.querySelector('.queued-messages');
+  const nextQueue = nextShell.querySelector('.queued-messages');
+  if (currentQueue && nextQueue) currentQueue.replaceWith(nextQueue);
+  else if (currentQueue && !nextQueue) currentQueue.remove();
+  else if (!currentQueue && nextQueue) currentForm.before(nextQueue);
+
+  syncPromptComposerState(currentForm, thread);
+  return true;
+}
+
+function renderDetail({ thread, turns, queuedMessages = [], events = [], permissionSettings = {} }) {
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
+  const model = modelFromThread(thread, turns);
+  const effort = effortFromThread(thread, turns);
+  const modelSource = thread?.modelSource || 'unknown';
+  const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return `<div class="detail-shell">
-    <div class="detail">
-      <div class="detail-head">
-        <div>
+    <div class="session-header">
+      <details class="session-meta">
+        <summary class="session-summary">
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
-          <div class="preview">${escapeHtml(thread.preview || '')}</div>
-        </div>
-        <div class="detail-actions">
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
-          <button type="button" data-action="rename-thread">Rename</button>
-          <button type="button" data-action="archive-thread">Archive</button>
-          ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
+          <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
+          ${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}
+        </summary>
+        <div class="session-details">
+          <div class="preview">${escapeHtml(thread.preview || '')}</div>
+          <div class="kv">
+            <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
+            <strong>Status</strong><span>${escapeHtml(status)}</span>
+            <strong>Model</strong><span>${escapeHtml(model || 'unknown')}</span>
+            <strong>Thinking</strong><span>${escapeHtml(effort || 'unknown')}</span>
+            <strong>Model source</strong><span>${escapeHtml(modelSource)}</span>
+            <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
+            <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
+            <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
+            <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
+            <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
+            <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
+          </div>
+          ${renderEventTimeline(timelineEvents)}
         </div>
+      </details>
+      <div class="detail-actions">
+        <button type="button" data-action="rename-thread">Rename</button>
+        <button type="button" data-action="archive-thread">Archive</button>
       </div>
-      <div class="kv">
-        <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
-        <strong>Status</strong><span>${escapeHtml(status)}</span>
-        <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
-        <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
-        <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
-        <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
-        <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
-        <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
-      </div>
-      ${renderEventTimeline(events)}
-      ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
+    </div>
+    <div class="detail">
+      ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
       ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
@@ -436,22 +760,67 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
           <input name="files" type="file" multiple>
           <span>+</span>
         </label>
+        <span class="attachment-status" aria-live="polite"></span>
+        ${renderPermissionControls(permissionSettings)}
+        <span class="prompt-spacer"></span>
+        ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
+      <div class="attachment-preview" aria-live="polite"></div>
     </form>
+  </div>`;
+}
+
+function selectedAttribute(value, expected) {
+  return value === expected ? ' selected' : '';
+}
+
+function checkedAttribute(value) {
+  return value ? ' checked' : '';
+}
+
+function renderPermissionControls(settings = {}) {
+  const sandbox = settings.sandboxPolicy?.type || '';
+  const approval = settings.approvalPolicy || '';
+  const network = Boolean(settings.sandboxPolicy?.networkAccess);
+  return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
+    <select name="sandboxPolicy" aria-label="Sandbox policy">
+      <option value=""${selectedAttribute(sandbox, '')}>config sandbox</option>
+      <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
+      <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
+      <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+    </select>
+    <select name="approvalPolicy" aria-label="Approval policy">
+      <option value=""${selectedAttribute(approval, '')}>config approvals</option>
+      <option value="untrusted"${selectedAttribute(approval, 'untrusted')}>untrusted only</option>
+      <option value="on-failure"${selectedAttribute(approval, 'on-failure')}>on failure</option>
+      <option value="on-request"${selectedAttribute(approval, 'on-request')}>on request</option>
+      <option value="granular"${selectedAttribute(approval, 'granular')}>granular</option>
+      <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
+    </select>
+    <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"${checkedAttribute(network)}> network</label>
   </div>`;
 }
 
 function renderEventTimeline(events = []) {
   const visible = events.slice(-10).reverse();
   if (!visible.length) return '';
+  const rowForModel = (event) => {
+    if (!event.modelFrom && !event.modelTo) return '';
+    const from = event.modelFrom ? `from ${escapeHtml(event.modelFrom)}` : '';
+    const to = event.modelTo ? `to ${escapeHtml(event.modelTo)}` : '';
+    return `<small class="event-model">${from}${from && to ? ' ' : ''}${to}</small>`;
+  };
   return `<section class="event-timeline" aria-label="Recent session events">
     <div class="event-title">Recent events</div>
-    ${visible.map((event) => `<div class="event-row">
+    ${visible.map((event) => {
+      const isModel = String(event.method ?? '').toLowerCase().includes('model') || !!(event.modelFrom || event.modelTo);
+      return `<div class="event-row${isModel ? ' model-change' : ''}">
       <time>${escapeHtml(fmtMillis(event.at))}</time>
       <span>${escapeHtml(event.message || event.method || 'Event')}</span>
+      ${rowForModel(event)}
       ${event.turnId ? `<code title="${escapeHtml(event.turnId)}">${escapeHtml(event.turnId.slice(0, 8))}</code>` : ''}
-    </div>`).join('')}
+    </div>`;}).join('')}
   </section>`;
 }
 
@@ -466,12 +835,54 @@ function renderBusyIndicator(thread) {
 function renderQueuedMessages(messages = []) {
   if (!messages.length) return '';
   return `<div class="queued-messages" aria-live="polite">
-    <div class="queued-title">Queued for after current run</div>
-    ${messages.map((message) => `<div class="queued-message">
-      <div class="queued-meta">Turn ${escapeHtml(message.turnId || '')}</div>
+    <div class="queued-title">Queued messages</div>
+    ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeHtml(message.turnId || '')}">
+      <div class="queued-head">
+        <span></span>
+        <div class="queued-actions">
+          <button type="button" data-queue-action="up" ${index === 0 ? 'disabled' : ''}>Up</button>
+          <button type="button" data-queue-action="down" ${index === messages.length - 1 ? 'disabled' : ''}>Down</button>
+          <button type="button" data-queue-action="steer">Steer now</button>
+          <button type="button" data-queue-action="remove">Remove</button>
+        </div>
+      </div>
+      ${renderQueuedAttachments(message.attachments)}
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
     </div>`).join('')}
   </div>`;
+}
+
+function renderQueuedAttachments(attachments = []) {
+  const images = attachments.filter((attachment) => attachment.type === 'image' && attachment.src);
+  if (!images.length) return '';
+  return `<div class="queued-attachments">
+    ${images.map((image) => `<img src="${escapeAttribute(image.src)}" alt="${escapeAttribute(image.filename || 'queued image')}" loading="lazy">`).join('')}
+  </div>`;
+}
+
+function bindQueuedMessageControls(threadId) {
+  detailEl.querySelectorAll('.queued-message[data-queued-id]').forEach((row) => {
+    row.querySelectorAll('[data-queue-action]').forEach((button) => {
+      button.addEventListener('click', () => updateQueuedMessage(threadId, row.dataset.queuedId, button.dataset.queueAction, button));
+    });
+  });
+}
+
+async function updateQueuedMessage(threadId, queuedId, action, button) {
+  if (!threadId || !queuedId || !action) return;
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = '...';
+  try {
+    const body = action === 'up' || action === 'down' ? { direction: action } : {};
+    await jsonApi(`/api/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedId)}/${action === 'up' || action === 'down' ? 'move' : action}`, body);
+    scheduleDetailRefresh(threadId, 100);
+    scheduleLoadSessions();
+  } catch (error) {
+    window.alert(error.message);
+    button.disabled = false;
+    button.textContent = label;
+  }
 }
 
 async function renameThread(id, thread) {
@@ -493,9 +904,8 @@ async function archiveThread(id) {
   scheduleLoadSessions();
 }
 
-async function steerTurn(id) {
+async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   const form = detailEl.querySelector('#promptForm');
-  const button = detailEl.querySelector('[data-action=steer-turn]');
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -511,7 +921,7 @@ async function steerTurn(id) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
-    form.reset();
+    clearPromptComposerContent(form);
     scheduleDetailRefresh(id, 250);
   } catch (error) {
     window.alert(error.message);
@@ -555,7 +965,7 @@ async function submitPrompt(event, id) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
-    form.reset();
+    clearPromptComposerContent(form);
     scheduleDetailRefresh(id, 700);
     scheduleLoadSessions();
   } catch (error) {
@@ -566,14 +976,197 @@ async function submitPrompt(event, id) {
   }
 }
 
-function renderTurn(turn, index) {
-  const status = String(turn.status ?? '').toLowerCase();
-  return `<section class="turn ${escapeHtml(status)}">
-    <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
-    ${turn.items.map(renderItem).join('')}
-    ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
-    ${renderTurnBreak(turn)}
+function bindPromptKeyboard(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  if (!form || !textarea) return;
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    form.requestSubmit();
+  });
+}
+
+function bindPromptPaste(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (!form || !textarea || !fileInput) return;
+
+  fileInput.addEventListener('change', () => updateAttachmentStatus(form));
+  textarea.addEventListener('paste', (event) => {
+    const files = imageFilesFromClipboard(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    appendFiles(fileInput, files);
+    updateAttachmentStatus(form);
+  });
+}
+
+function imageFilesFromClipboard(clipboardData) {
+  if (!clipboardData) return [];
+  const fromItems = [...(clipboardData.items ?? [])]
+    .filter((item) => item.kind === 'file' && String(item.type).toLowerCase().startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (fromItems.length) return fromItems;
+  return [...(clipboardData.files ?? [])].filter((file) => String(file.type).toLowerCase().startsWith('image/'));
+}
+
+function appendFiles(input, files) {
+  if (!input || !files.length) return;
+  const transfer = new DataTransfer();
+  for (const file of input.files ?? []) transfer.items.add(file);
+  for (const file of files) transfer.items.add(file);
+  input.files = transfer.files;
+}
+
+function updateAttachmentStatus(form) {
+  const status = form?.querySelector('.attachment-status');
+  const preview = form?.querySelector('.attachment-preview');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (!status || !fileInput) return;
+  const files = [...(fileInput.files ?? [])];
+  const count = files.length;
+  status.textContent = count ? `${count} attachment${count === 1 ? '' : 's'} ready` : '';
+  if (!preview) return;
+  preview.innerHTML = files.map((file) => {
+    const isImage = String(file.type).toLowerCase().startsWith('image/');
+    if (isImage) {
+      const src = URL.createObjectURL(file);
+      return `<figure class="attachment-thumb">
+        <button type="button" class="attachment-remove" data-index="${escapeAttribute(files.indexOf(file))}" aria-label="Remove attachment">x</button>
+        <img src="${escapeAttribute(src)}" alt="${escapeAttribute(file.name || 'pasted image')}" loading="lazy">
+        <figcaption>${escapeHtml(file.name || 'pasted image')}</figcaption>
+      </figure>`;
+    }
+    return `<div class="attachment-file">
+      <button type="button" class="attachment-remove" data-index="${escapeAttribute(files.indexOf(file))}" aria-label="Remove attachment">x</button>
+      <span>${escapeHtml(file.name || 'attachment')}</span>
+      <small>${escapeHtml(file.type || 'file')}</small>
+    </div>`;
+  }).join('');
+  preview.querySelectorAll('.attachment-remove').forEach((button) => {
+    button.addEventListener('click', () => {
+      removeAttachmentAt(fileInput, Number(button.dataset.index));
+      updateAttachmentStatus(form);
+    });
+  });
+}
+
+function removeAttachmentAt(input, removeIndex) {
+  if (!input || !Number.isInteger(removeIndex)) return;
+  const transfer = new DataTransfer();
+  [...(input.files ?? [])].forEach((file, index) => {
+    if (index !== removeIndex) transfer.items.add(file);
+  });
+  input.files = transfer.files;
+}
+
+function syncPromptComposerState(form, thread) {
+  if (!form) return;
+  const busy = isBusyThread(thread);
+  const submit = form.querySelector('button[type="submit"]');
+  const actions = form.querySelector('.prompt-actions');
+  if (submit) submit.textContent = busy ? 'Send after current' : 'Send';
+  if (!actions) return;
+  const steer = actions.querySelector('[data-action="steer-turn"]');
+  const stop = actions.querySelector('[data-action="interrupt-turn"]');
+  if (busy && !stop) submit?.insertAdjacentHTML('beforebegin', '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>');
+  if (busy && !steer) submit?.insertAdjacentHTML('beforebegin', '<button type="button" data-action="steer-turn">Steer now</button>');
+  if (!busy && stop) stop.remove();
+  if (!busy && steer) steer.remove();
+}
+
+function restorePromptDraft(form, prompt, files = []) {
+  if (!form || (!prompt && !files.length)) return;
+  const textarea = form.querySelector('textarea[name="prompt"]');
+  const fileInput = form.querySelector('input[name="files"]');
+  if (textarea && prompt) textarea.value = prompt;
+  if (fileInput && files.length) {
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(file);
+    fileInput.files = transfer.files;
+  }
+  updateAttachmentStatus(form);
+}
+
+function restorePromptFocus(form, selection) {
+  if (!form || !selection) return;
+  const textarea = form.querySelector('textarea[name="prompt"]');
+  if (!textarea) return;
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(selection.start ?? textarea.value.length, selection.end ?? textarea.value.length, selection.direction ?? 'none');
+}
+
+function clearPromptComposerContent(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (textarea) textarea.value = '';
+  if (fileInput) fileInput.value = '';
+  updateAttachmentStatus(form);
+}
+
+function renderTurn(turn, index, thread) {
+  const threadBusy = isBusyThread(thread);
+  const turnStatus = String(turn.status ?? '').toLowerCase();
+  const activeLatestTurn = index === 0 && threadBusy;
+  const statusValue = activeLatestTurn
+    ? statusLabel(thread)
+    : (threadBusy && turnStatus === 'interrupted' ? '' : turn.status);
+  const status = String(statusValue ?? '').toLowerCase();
+  const model = modelFromValue(turn);
+  const effort = effortFromValue(turn);
+  const summary = turnSummary(turn);
+  const innerItems = [
+    `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
+    ...(summary.hiddenItems ?? []).map(renderItem),
+    ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
+    renderTurnBreak(turn, statusValue, threadBusy),
+  ].filter(Boolean);
+  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || (turn.steeredMessages?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
+  const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
+  return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
+    <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
+    <div class="turn-compact">
+      <article>
+        <div class="item-type">Prompt</div>
+        ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)') : renderMarkdownText(summary.prompt || '(no prompt text)')}
+      </article>
+      ${hasInnerItems ? `<details class="turn-details">
+        <summary>Intermediate activity</summary>
+        <div class="turn-full">${innerItems.join('')}</div>
+      </details>` : ''}
+      ${hasResponse ? `<article>
+        <div class="item-type">Response</div>
+        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response) : renderMarkdownText(summary.response)}
+      </article>` : ''}
+    </div>
   </section>`;
+}
+
+function textForItem(item) {
+  if (!item) return '';
+  if (Array.isArray(item.parts) && item.parts.length) {
+    return item.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text || '')
+      .filter(Boolean)
+      .join('\n');
+  }
+  return item.text || '';
+}
+
+function turnSummary(turn) {
+  const items = turn.items ?? [];
+  const userItem = items.find((item) => item.type === 'userMessage');
+  const agentItems = items.filter((item) => item.type === 'agentMessage');
+  const finalAgent = [...agentItems].reverse().find((item) => item.phase !== 'commentary') ?? agentItems[agentItems.length - 1];
+  return {
+    prompt: textForItem(userItem),
+    response: textForItem(finalAgent),
+    promptItem: userItem,
+    responseItem: finalAgent,
+    hiddenItems: items.filter((item) => item !== userItem && item !== finalAgent),
+  };
 }
 
 function renderSteeredMessage(message) {
@@ -583,8 +1176,9 @@ function renderSteeredMessage(message) {
   </div>`;
 }
 
-function renderTurnBreak(turn) {
-  const status = String(turn.status ?? '').toLowerCase();
+function renderTurnBreak(turn, statusOverride = turn.status, suppressInterrupted = false) {
+  const status = String(statusOverride ?? '').toLowerCase();
+  if (suppressInterrupted && status === 'interrupted') return '';
   if (status === 'interrupted') return '<div class="turn-break interrupted">Run stopped</div>';
   if (status === 'failed' || status === 'error') return '<div class="turn-break error">Run failed</div>';
   return '';
@@ -616,18 +1210,47 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
+function mediaKindFromSrc(src) {
+  const raw = String(src ?? '').toLowerCase();
+  if (raw.includes('kind=video')) return 'video';
+  if (raw.includes('kind=image')) return 'image';
+  const clean = raw.split('?')[0];
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(clean) || clean.startsWith('/api/media/')) return 'image';
+  if (/\.(mp4|webm|mov|m4v)$/.test(clean)) return 'video';
+  return 'file';
+}
+
+function renderMarkdownMedia(src, label = '', embedded = false) {
+  const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
+  const caption = escapeHtml(label || 'media');
+  const kind = mediaKindFromSrc(cleanSrc);
+  if (embedded && kind === 'image') {
+    return `<figure class="session-image"><img src="${escapeAttribute(cleanSrc)}" alt="${escapeAttribute(label || 'Session image')}" loading="lazy"><figcaption>${caption}</figcaption></figure>`;
+  }
+  if (embedded && kind === 'video') {
+    return `<figure class="session-image session-video"><video src="${escapeAttribute(cleanSrc)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
+  }
+  return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
+}
+
 function renderInlineMarkdown(text) {
   const codeSpans = [];
+  const media = [];
   let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
     const token = `@@CODE${codeSpans.length}@@`;
     codeSpans.push(`<code>${escapeHtml(code)}</code>`);
     return token;
+  }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
+    const token = `@@MEDIA${media.length}@@`;
+    media.push(renderMarkdownMedia(src, alt, true));
+    return token;
   });
   html = escapeHtml(html);
-  html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
+  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
+  html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
+  for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
   return html;
 }
 
@@ -686,9 +1309,111 @@ function renderMarkdownBlocks(text) {
 function renderMarkdownText(text) {
   const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
   return `<div class="markdown-body">${segments.map((segment, index) => {
-    if (index % 2 === 1) return `<pre class="md-code"><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
+    if (index % 2 === 1) return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
     return renderMarkdownBlocks(segment);
   }).join('')}</div>`;
+}
+
+function bindCodeCopyControls() {
+  detailEl.querySelectorAll('.copy-code').forEach((button) => {
+    button.onclick = async () => {
+      const code = button.parentElement?.querySelector('code')?.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(code);
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+      } catch {
+        window.alert('Could not copy code.');
+      }
+    };
+  });
+}
+
+function bindSessionImageViewer() {
+  detailEl.querySelectorAll('.session-image img, .queued-attachments img').forEach((image) => {
+    image.addEventListener('click', () => openImageLightbox(image.src, image.alt || 'Session image'));
+  });
+}
+
+function openImageLightbox(src, alt = '') {
+  lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+  lightboxImage.src = src;
+  lightboxImage.alt = alt;
+  lightboxImage.ondragstart = () => false;
+  imageLightbox.hidden = false;
+  updateLightboxTransform();
+}
+
+function closeImageLightbox() {
+  imageLightbox.hidden = true;
+  lightboxImage.removeAttribute('src');
+}
+
+function updateLightboxTransform() {
+  lightboxImage.style.transform = `translate(${lightboxState.x}px, ${lightboxState.y}px) scale(${lightboxState.scale})`;
+}
+
+function zoomLightbox(delta, origin = { x: 0, y: 0 }) {
+  const previous = lightboxState.scale;
+  const next = Math.min(8, Math.max(0.25, previous * delta));
+  if (next === previous) return;
+  lightboxState.x = origin.x - ((origin.x - lightboxState.x) * next / previous);
+  lightboxState.y = origin.y - ((origin.y - lightboxState.y) * next / previous);
+  lightboxState.scale = next;
+  updateLightboxTransform();
+}
+
+function resetLightbox() {
+  lightboxState.scale = 1;
+  lightboxState.x = 0;
+  lightboxState.y = 0;
+  updateLightboxTransform();
+}
+
+function bindImageLightbox() {
+  imageLightbox.addEventListener('click', (event) => {
+    const action = event.target?.dataset?.action;
+    if (action === 'close-lightbox') closeImageLightbox();
+    if (action === 'zoom-in') zoomLightbox(1.25);
+    if (action === 'zoom-out') zoomLightbox(0.8);
+    if (action === 'zoom-reset') resetLightbox();
+  });
+  imageLightbox.addEventListener('wheel', (event) => {
+    if (imageLightbox.hidden) return;
+    event.preventDefault();
+    const rect = lightboxImage.getBoundingClientRect();
+    zoomLightbox(event.deltaY < 0 ? 1.12 : 0.89, {
+      x: event.clientX - rect.left - rect.width / 2,
+      y: event.clientY - rect.top - rect.height / 2,
+    });
+  }, { passive: false });
+  lightboxImage.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    lightboxState.dragging = true;
+    lightboxState.startX = event.clientX;
+    lightboxState.startY = event.clientY;
+    lightboxState.originX = lightboxState.x;
+    lightboxState.originY = lightboxState.y;
+    lightboxImage.setPointerCapture(event.pointerId);
+  });
+  lightboxImage.addEventListener('pointermove', (event) => {
+    if (!lightboxState.dragging) return;
+    event.preventDefault();
+    event.stopPropagation();
+    lightboxState.x = lightboxState.originX + event.clientX - lightboxState.startX;
+    lightboxState.y = lightboxState.originY + event.clientY - lightboxState.startY;
+    updateLightboxTransform();
+  });
+  lightboxImage.addEventListener('pointerup', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    lightboxState.dragging = false;
+  });
+  lightboxImage.addEventListener('dblclick', resetLightbox);
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !imageLightbox.hidden) closeImageLightbox();
+  });
 }
 
 function shouldRenderMarkdown(item) {
@@ -803,8 +1528,11 @@ filters.addEventListener('submit', (event) => event.preventDefault());
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
 repoFilter.addEventListener('change', () => {
-  if (repoFilter.value !== '__add_repo__') return;
-  const previous = [...repoFilter.options].find((option) => option.defaultSelected)?.value || '';
+  if (repoFilter.value !== '__add_repo__') {
+    saveSelectedRepo(repoFilter.value);
+    return;
+  }
+  const previous = savedSelectedRepo();
   const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
   if (!value) {
     repoFilter.value = previous;
@@ -813,9 +1541,12 @@ repoFilter.addEventListener('change', () => {
   saveCustomRepos([...customRepos(), value]);
   updateRepoOptions([]);
   repoFilter.value = value;
+  saveSelectedRepo(value);
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
+runtimeButton.addEventListener('click', openRuntimeDialog);
+closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
 createWorktreeButton.addEventListener('click', createFeatureWorktree);
@@ -838,6 +1569,7 @@ splitter.addEventListener('pointerup', () => {
   document.body.classList.remove('resizing-sidebar');
 });
 applySavedLayout();
+bindImageLightbox();
 connectEvents();
 setInterval(refreshAgeIndicators, 30 * 1000);
 await loadHealth();

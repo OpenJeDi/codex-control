@@ -23,8 +23,8 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 
 ## Session model controls
 
-- Show the model used by the active session permanently in the session UI, probably as a compact label inside or near the prompt bar.
-- Make that same model label interactive: clicking it opens a dropdown to switch the model for the current session.
+- Implemented: show the model used by the active session in the session UI, with source-aware status (`thread.modelSource`) visible in session/turn rendering.
+- Remaining: make that model label interactive by opening a dropdown to switch model/provider for the current session.
 - The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
 
 ## Prompt queue, steering, and interruption UX

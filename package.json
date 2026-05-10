@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs"
+    "dev": "node --watch src/server.mjs",
+    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-codex-control.ps1"
   },
   "engines": {
     "node": ">=18"

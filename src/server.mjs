@@ -1,8 +1,9 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, watch } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ const host = process.env.HOST || '127.0.0.1';
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
+const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
 
 class CodexAppServer {
   constructor() {
@@ -23,12 +25,16 @@ class CodexAppServer {
     this.statusByThread = new Map();
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
+    this.permissionSettingsByThread = new Map();
+    this.attachmentsByTurn = new Map();
+    this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
     this.eventsByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
     this.threadsChangedTimer = null;
     this.pendingChangedThreadIds = new Set();
+    this.codexHome = null;
     this.ready = this.start();
   }
 
@@ -66,6 +72,7 @@ class CodexAppServer {
     }).then((result) => {
       this.notify('initialized', {});
       this.info = result;
+      this.codexHome = result?.codexHome ?? null;
       this.watchCodexHome(result.codexHome);
       return result;
     });
@@ -95,6 +102,7 @@ class CodexAppServer {
   handleNotification(message) {
     const method = message.method;
     const params = message.params ?? {};
+    this.maybeDrainQueuedTurn(method, params);
     this.rememberStatus(method, params);
     this.rememberEvent(method, params);
     this.broadcast('codex-notification', { method, params });
@@ -149,7 +157,7 @@ class CodexAppServer {
     this.proc.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
-  async listThreads({ includeArchived = false, limit = 50 } = {}) {
+  async listThreads({ includeArchived = false, limit = 50, searchTerm = '', cwd = '', sourceKinds = defaultSourceKinds } = {}) {
     await this.ready;
     const target = Math.min(Math.max(Number(limit) || 50, 1), 500);
     const data = [];
@@ -157,7 +165,10 @@ class CodexAppServer {
 
     while (data.length < target) {
       const pageLimit = Math.min(25, target - data.length);
-      const params = { includeArchived, limit: pageLimit };
+      const params = { archived: Boolean(includeArchived), limit: pageLimit, sortKey: 'updated_at' };
+      if (Array.isArray(sourceKinds) && sourceKinds.length) params.sourceKinds = sourceKinds;
+      if (String(searchTerm ?? '').trim()) params.searchTerm = String(searchTerm).trim();
+      if (String(cwd ?? '').trim()) params.cwd = String(cwd).trim();
       if (cursor) params.cursor = cursor;
       const result = await this.request('thread/list', params);
       data.push(...(result.data ?? []));
@@ -180,22 +191,65 @@ class CodexAppServer {
     const key = String(threadId);
     const turnData = turns.data ?? [];
     this.pruneQueuedMessages(key, new Set(turnData.map((turn) => String(turn.id))));
+    const thread = await this.decorateThread(read.thread);
+    const turnModelsFromCodex = (turnData ?? []).map((turn) => extractModelFromPayload(turn));
+    const threadModelFromCodex = extractModelFromPayload(
+      thread?.model
+        || thread?.currentModel
+        || thread?.config?.model
+        || thread?.settings?.model
+        || thread?.metadata?.model
+        || thread?.provider?.model,
+    );
+    const hasAnyTurnFromCodex = turnModelsFromCodex.some((value) => Boolean(value));
+    const hasMissingTurnModelFromCodex = turnModelsFromCodex.some((value) => !Boolean(value));
+    const allTurnModelsFromCodex = turnModelsFromCodex.length && turnModelsFromCodex.every((value) => Boolean(value));
+    let modelSource = threadModelFromCodex || allTurnModelsFromCodex ? 'codex' : 'unknown';
+
+    let resolvedTurns = turnData;
+    let resolvedThread = thread;
+
+    if (shouldUseRolloutModelHints(read.thread, turnData)) {
+      const rolloutModelInfo = await getRolloutModelInfo(read.thread?.path, threadId, this.codexHome);
+      if (rolloutModelInfo) {
+        resolvedTurns = applyRolloutModelHints(turnData, rolloutModelInfo);
+        resolvedThread = applyRolloutModelHintsToThread(thread, rolloutModelInfo, resolvedTurns);
+        if (modelSource === 'codex' && hasMissingTurnModelFromCodex) {
+          modelSource = 'mixed';
+        } else if (modelSource === 'unknown') {
+          modelSource = hasAnyTurnFromCodex ? 'mixed' : 'rollout';
+        }
+      }
+    }
+
+    const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
-      thread: await this.decorateThread(read.thread),
-      turns: turnData.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
-      queuedMessages: this.queuedMessagesByThread.get(key) ?? [],
+      thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
+      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
+      permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
     };
   }
 
-  async startThread(cwd) {
+  async startThread(cwd, overrides = {}) {
     await this.ready;
     const result = await this.request('thread/start', { cwd }, 30000);
-    if (result.thread) this.rememberStatus('thread/started', { thread: result.thread });
+    if (result.thread) {
+      this.rememberStatus('thread/started', { thread: result.thread });
+      this.rememberPermissionSettings(result.thread.id, overrides);
+    }
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
-  async startTurn(threadId, input) {
+  async resumeThread(threadId) {
+    await this.ready;
+    const result = await this.request('thread/resume', { threadId }, 30000);
+    if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
+    return { ...result, thread: await this.decorateThread(result.thread) };
+  }
+
+  async startTurn(threadId, input, overrides = {}) {
     await this.ready;
     let activeBefore = null;
     try {
@@ -204,16 +258,18 @@ class CodexAppServer {
       if (!isTurnsNotReadyError(error)) throw error;
     }
 
-    const result = await this.request('turn/start', { threadId, input }, 30000);
-    const turnId = result.turn?.id;
-    if (activeBefore && turnId && String(activeBefore) !== String(turnId)) {
-      this.addQueuedMessage(threadId, turnId, input);
+    if (activeBefore) {
+      const queued = this.addQueuedMessage(threadId, input, overrides);
       this.statusByThread.set(String(threadId), { type: 'running' });
-      this.rememberEvent('turn/queued', { threadId, turnId });
-      this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId } });
-      return result;
+      this.rememberEvent('turn/queued', { threadId, turnId: queued.turnId });
+      this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId: queued.turnId } });
+      return { queued: true, threadId, turn: { id: queued.turnId, status: 'queued' } };
     }
 
+    this.rememberPermissionSettings(threadId, overrides);
+    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000);
+    const turnId = result.turn?.id;
+    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
@@ -282,31 +338,85 @@ class CodexAppServer {
     const threadId = params.threadId ?? params.id ?? thread?.id;
     if (!threadId) return;
     const turnId = params.turnId ?? params.turn?.id;
+    const modelFrom = extractModelFromParams(params, 'from');
+    const modelTo = extractModelFromParams(params, 'to');
     const event = {
       at: Date.now(),
       method: String(method ?? ''),
       turnId: turnId ? String(turnId) : null,
       status: params.status?.type ?? params.status ?? thread?.status?.type ?? null,
       message: eventMessage(method, params),
+      modelFrom: modelFrom || null,
+      modelTo: modelTo || null,
+      model: modelTo || modelFrom || null,
     };
     const key = String(threadId);
     const current = this.eventsByThread.get(key) ?? [];
     this.eventsByThread.set(key, [...current, event].slice(-80));
   }
 
-  addQueuedMessage(threadId, turnId, input) {
+  rememberPermissionSettings(threadId, overrides = {}) {
+    if (!threadId || !Object.keys(overrides).length) return;
+    const key = String(threadId);
+    const current = this.permissionSettingsByThread.get(key) ?? {};
+    this.permissionSettingsByThread.set(key, { ...current, ...overrides });
+  }
+
+  rememberTurnAttachments(threadId, turnId, attachments = []) {
+    if (!threadId || !turnId || !attachments.length) return;
+    const key = String(threadId);
+    const current = this.attachmentsByTurn.get(key) ?? new Map();
+    current.set(String(turnId), attachments);
+    this.attachmentsByTurn.set(key, current);
+  }
+
+  attachmentsForTurn(threadId, turnId) {
+    if (!threadId || !turnId) return [];
+    return this.attachmentsByTurn.get(String(threadId))?.get(String(turnId)) ?? [];
+  }
+
+  addQueuedMessage(threadId, input, overrides = {}) {
     const text = textFromContent(input);
     const key = String(threadId);
+    const turnId = `queued-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const current = this.queuedMessagesByThread.get(key) ?? [];
-    this.queuedMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+    const message = { turnId, input, overrides, text: truncate(text, 1600), createdAt: Date.now() };
+    this.queuedMessagesByThread.set(key, [...current, message].slice(-25));
+    return message;
   }
 
   removeQueuedMessage(threadId, turnId) {
     const key = String(threadId);
     const current = this.queuedMessagesByThread.get(key) ?? [];
+    const removed = current.find((message) => String(message.turnId) === String(turnId)) ?? null;
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
+    return removed ? compactQueuedMessage(removed) : null;
+  }
+
+  moveQueuedMessage(threadId, turnId, direction) {
+    const key = String(threadId);
+    const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
+    const index = current.findIndex((message) => String(message.turnId) === String(turnId));
+    if (index === -1) return current.map(compactQueuedMessage);
+    const delta = direction === 'down' ? 1 : -1;
+    const target = Math.max(0, Math.min(current.length - 1, index + delta));
+    if (target !== index) {
+      const [message] = current.splice(index, 1);
+      current.splice(target, 0, message);
+      this.queuedMessagesByThread.set(key, current);
+    }
+    return current.map(compactQueuedMessage);
+  }
+
+  async steerQueuedMessage(threadId, turnId) {
+    const key = String(threadId);
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const message = current.find((queued) => String(queued.turnId) === String(turnId));
+    if (!message) throw new Error('Queued message not found.');
+    this.removeQueuedMessage(threadId, turnId);
+    return this.steerTurn(threadId, message.input);
   }
 
   pruneQueuedMessages(threadId, seenTurnIds) {
@@ -315,6 +425,46 @@ class CodexAppServer {
     const next = current.filter((message) => !seenTurnIds.has(String(message.turnId)));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
+  }
+
+  maybeDrainQueuedTurn(method, params = {}) {
+    const lower = String(method ?? '').toLowerCase();
+    if (!lower.includes('turn/completed') && !lower.includes('turncompleted') && !lower.includes('interrupt')) return;
+    let threadId = params.threadId ?? params.thread?.id;
+    const turnId = params.turnId ?? params.turn?.id;
+    if (!threadId && turnId) {
+      for (const [candidateThreadId, activeTurnId] of this.activeTurnByThread.entries()) {
+        if (String(activeTurnId) === String(turnId)) {
+          threadId = candidateThreadId;
+          break;
+        }
+      }
+    }
+    if (!threadId) return;
+    this.activeTurnByThread.delete(String(threadId));
+    setTimeout(() => this.drainQueuedTurn(threadId).catch((error) => {
+      console.warn('[codex-control] failed to start queued turn:', error.message);
+    }), 250);
+  }
+
+  async drainQueuedTurn(threadId) {
+    const key = String(threadId);
+    if (this.queueDrainByThread.has(key)) return;
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const next = current[0];
+    if (!next) return;
+    this.queueDrainByThread.add(key);
+    try {
+      const remaining = current.slice(1);
+      if (remaining.length) this.queuedMessagesByThread.set(key, remaining);
+      else this.queuedMessagesByThread.delete(key);
+      this.rememberEvent('turn/dequeued', { threadId, turnId: next.turnId });
+      this.broadcast('codex-notification', { method: 'turn/dequeued', params: { threadId, turnId: next.turnId } });
+      await this.resumeThread(threadId);
+      await this.startTurn(threadId, next.input, next.overrides ?? {});
+    } finally {
+      this.queueDrainByThread.delete(key);
+    }
   }
 
   async activeTurnId(threadId) {
@@ -396,6 +546,168 @@ const terminalRolloutEvents = new Set([
   'completed',
   'error',
 ]);
+
+function shouldUseRolloutModelHints(thread, turns = []) {
+  const threadModel = extractModelFromPayload(
+    thread?.model
+      || thread?.currentModel
+      || thread?.config?.model
+      || thread?.settings?.model
+      || thread?.metadata?.model
+      || thread?.provider?.model,
+  );
+  const threadEffort = extractEffortFromPayload(thread);
+  if (!threadModel || !threadEffort) return true;
+  for (const turn of turns ?? []) {
+    if (!extractModelFromPayload(turn) || !extractEffortFromPayload(turn)) return true;
+  }
+  return false;
+}
+
+function resolveRolloutPath(filePath, threadId, codexHome) {
+  if (!filePath && !threadId) return null;
+
+  if (filePath) {
+    if (existsSync(filePath)) return filePath;
+    try {
+      const resolvedPath = path.resolve(filePath);
+      if (existsSync(resolvedPath)) return resolvedPath;
+    } catch {
+      // fallback below
+    }
+  }
+
+  if (!threadId || !codexHome) return null;
+  const candidate = path.join(codexHome, 'sessions', `${threadId}.jsonl`);
+  return existsSync(candidate) ? candidate : null;
+}
+
+async function getRolloutModelInfo(filePath, threadId, codexHome) {
+  const candidatePath = resolveRolloutPath(filePath, threadId, codexHome);
+  if (!candidatePath) return null;
+
+  let resolvedPath = candidatePath;
+  try {
+    resolvedPath = path.resolve(candidatePath);
+  } catch {
+    resolvedPath = candidatePath;
+  }
+  try {
+    const handle = await open(resolvedPath, 'r');
+    let fileStat;
+    try {
+      fileStat = await handle.stat();
+    } finally {
+      await handle.close();
+    }
+    const cached = rolloutModelInfoCache.get(resolvedPath);
+    if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) return cached;
+    const info = await readRolloutModelInfo(resolvedPath);
+    const merged = {
+      ...info,
+      mtimeMs: fileStat.mtimeMs,
+      size: fileStat.size,
+    };
+    rolloutModelInfoCache.set(resolvedPath, merged);
+    return merged;
+  } catch {
+    return null;
+  }
+}
+
+function getRolloutTurnId(event) {
+  const payload = event?.payload ?? {};
+  return String(payload.turn_id ?? payload.turnId ?? payload.turn?.id ?? '').trim();
+}
+
+async function readRolloutModelInfo(filePath) {
+  const turnModels = new Map();
+  const turnEfforts = new Map();
+  let threadModel = '';
+  let threadEffort = '';
+  const seenTurnModels = new Map();
+  const seenTurnEfforts = new Map();
+
+  try {
+    const input = createReadStream(filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+
+    for await (const line of lines) {
+      const text = String(line ?? '').trim();
+      if (!text) continue;
+
+      let event;
+      try {
+        event = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      const payload = event.payload ?? event;
+      const model = extractModelFromPayload(payload);
+      const effort = extractEffortFromPayload(payload);
+      const turnId = getRolloutTurnId(event);
+      if (model) {
+        if (event?.type === 'session_meta' || !threadModel) threadModel = model;
+        if (turnId) seenTurnModels.set(turnId, model);
+      }
+      if (effort) {
+        if (event?.type === 'session_meta' || !threadEffort) threadEffort = effort;
+        if (turnId) seenTurnEfforts.set(turnId, effort);
+      }
+    }
+  } catch {
+    return { threadModel: '', turnModels: new Map() };
+  }
+
+  for (const [turnId, model] of seenTurnModels.entries()) {
+    if (model) turnModels.set(turnId, model);
+  }
+  for (const [turnId, effort] of seenTurnEfforts.entries()) {
+    if (effort) turnEfforts.set(turnId, effort);
+  }
+
+  return {
+    threadModel,
+    threadEffort,
+    turnModels,
+    turnEfforts,
+  };
+}
+
+const rolloutModelInfoCache = new Map();
+
+function applyRolloutModelHints(turns, rolloutInfo) {
+  if (!rolloutInfo || !turns?.length) return turns;
+  const turnModels = rolloutInfo.turnModels ?? new Map();
+  const turnEfforts = rolloutInfo.turnEfforts ?? new Map();
+
+  return turns.map((turn) => {
+    if (!turn?.id) return turn;
+    const fromRolloutModel = extractModelFromPayload(turnModels.get(String(turn.id)));
+    const fromRolloutEffort = extractEffortFromPayload(turnEfforts.get(String(turn.id)));
+    return {
+      ...turn,
+      ...(extractModelFromPayload(turn) || !fromRolloutModel ? {} : { model: fromRolloutModel }),
+      ...(extractEffortFromPayload(turn) || !fromRolloutEffort ? {} : { effort: fromRolloutEffort }),
+    };
+  });
+}
+
+function applyRolloutModelHintsToThread(thread, rolloutInfo, turns = []) {
+  if (!thread || !rolloutInfo) return thread;
+  const currentThreadModel = extractModelFromPayload(thread.model);
+  const currentThreadEffort = extractEffortFromPayload(thread);
+  const fromTurns = [...turns].map((turn) => extractModelFromPayload(turn)).filter(Boolean).pop() || '';
+  const effortFromTurns = [...turns].map((turn) => extractEffortFromPayload(turn)).filter(Boolean).pop() || '';
+  const fromRollout = extractModelFromPayload(rolloutInfo.threadModel) || fromTurns;
+  const effortFromRollout = extractEffortFromPayload(rolloutInfo.threadEffort) || effortFromTurns;
+  return {
+    ...thread,
+    ...(currentThreadModel || !fromRollout ? {} : { model: fromRollout }),
+    ...(currentThreadEffort || !effortFromRollout ? {} : { effort: effortFromRollout }),
+  };
+}
 
 async function inferExternalThreadStatus(thread) {
   const currentType = String(thread?.status?.type ?? '').toLowerCase();
@@ -533,7 +845,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = []) {
+function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
   return {
     id: turn.id,
     status: turn.status,
@@ -541,9 +853,43 @@ function compactTurn(turn, steeredMessages = []) {
     startedAt: turn.startedAt,
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
+    model: extractModelFromPayload(turn),
+    effort: extractEffortFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: (turn.items ?? []).map(compactItem),
+    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
   };
+}
+
+function compactQueuedMessage(message) {
+  return {
+    turnId: message.turnId,
+    text: message.text,
+    attachments: attachmentsFromInput(message.input),
+    createdAt: message.createdAt,
+  };
+}
+
+function mergeTurnAttachments(items, attachments = []) {
+  if (!attachments.length) return items;
+  const userIndex = items.findIndex((item) => item.type === 'userMessage');
+  if (userIndex === -1) return items;
+  const next = [...items];
+  const userItem = next[userIndex];
+  const existingParts = Array.isArray(userItem.parts) ? userItem.parts : [];
+  const existingSrcs = new Set(existingParts.map((part) => part.src).filter(Boolean));
+  const attachmentParts = attachments.filter((attachment) => !existingSrcs.has(attachment.src));
+  next[userIndex] = { ...userItem, parts: [...existingParts, ...attachmentParts] };
+  return next;
+}
+
+function attachmentsFromInput(input = []) {
+  return (Array.isArray(input) ? input : [])
+    .filter((part) => part?.type === 'localImage' && part.path)
+    .map((part) => {
+      const media = mediaFromLocalFilePath(part.path);
+      return media ? { type: 'image', ...media, filename: path.basename(part.path) } : null;
+    })
+    .filter(Boolean);
 }
 
 
@@ -559,13 +905,21 @@ function shouldStoreEvent(method) {
 
 function eventMessage(method, params = {}) {
   const lower = String(method ?? '').toLowerCase();
+  const modelFrom = extractModelFromParams(params, 'from');
+  const modelTo = extractModelFromParams(params, 'to');
   const status = params.status?.type ?? params.thread?.status?.type ?? params.status;
-  const name = String(params.name ?? '').trim();
-  if (lower.includes('thread/name/set')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name cleared';
-  if (lower.includes('thread/name')) return 'Name updated';
+  const name = String(params.name ?? params.thread?.name ?? params.thread?.title ?? '').trim();
+  if (lower.includes('model')) {
+    if (modelFrom && modelTo && modelFrom !== modelTo) return `Model changed: ${modelFrom} -> ${modelTo}`;
+    if (modelTo) return `Model set to "${modelTo}"`;
+    if (modelFrom) return `Model set to "${modelFrom}"`;
+  }
+  if (lower.includes('thread/name/set') || lower.includes('thread/name/updated')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name updated';
+  if (lower.includes('thread/name')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name updated';
   if (lower.includes('thread/archive')) return 'Archived session';
   if (lower.includes('thread/unarchive')) return 'Restored session';
   if (lower.includes('thread/start')) return 'Opened session';
+  if (lower.includes('turn/dequeued')) return 'Started queued follow-up';
   if (lower.includes('turn/queued')) return 'Queued follow-up prompt';
   if (lower.includes('turn/steer') || lower.includes('steered')) return 'Steered active turn';
   if (lower.includes('interrupt') || lower.includes('interrupted')) return 'Stopped active turn';
@@ -574,6 +928,124 @@ function eventMessage(method, params = {}) {
   if (lower.includes('turn/error') || lower.includes('failed')) return 'Turn error';
   if (status) return `Status: ${String(status)}`;
   return String(method ?? 'Event');
+}
+
+function inferThreadModel(thread, turns = []) {
+  const direct = extractModelFromPayload(thread?.model)
+    || extractModelFromPayload(thread?.config?.model)
+    || extractModelFromPayload(thread?.settings?.model)
+    || extractModelFromPayload(thread?.metadata?.model)
+    || extractModelFromPayload(thread?.provider?.model);
+  if (direct) return direct;
+
+  const turnModels = (turns ?? [])
+    .map((turn) => extractModelFromPayload(turn))
+    .filter(Boolean);
+  return turnModels.length ? turnModels[turnModels.length - 1] : '';
+}
+
+function extractModelFromPayload(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return normalizeModelValue(value);
+  if (typeof value === 'number' || typeof value === 'bigint') return normalizeModelValue(String(value));
+  if (typeof value !== 'object') return '';
+
+  const candidates = [
+    value.model,
+    value.name,
+    value.id,
+    value.value,
+    value.providerModel,
+    value.modelName,
+    value.modelName?.name,
+    value.currentModel,
+    value.currentModel?.name,
+    value.model_name,
+    value.current_model,
+    value.provider_model,
+    value.model_id,
+    value.config?.model,
+    value.settings?.model,
+    value.metadata?.model,
+    value.provider?.model,
+    value.model?.name,
+    value.model?.id,
+    value.model?.value,
+  ];
+
+  for (const candidate of candidates) {
+    const model = extractModelFromPayload(candidate);
+    if (model) return model;
+  }
+
+  return '';
+}
+
+function normalizeEffortValue(value) {
+  const text = String(value ?? '').trim();
+  return ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(text.toLowerCase()) ? text : '';
+}
+
+function extractEffortFromPayload(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return normalizeEffortValue(value);
+  if (typeof value !== 'object') return '';
+
+  const candidates = [
+    value.effort,
+    value.reasoningEffort,
+    value.reasoning_effort,
+    value.thinkingLevel,
+    value.thinking_level,
+    value.config?.effort,
+    value.config?.reasoningEffort,
+    value.settings?.effort,
+    value.settings?.reasoningEffort,
+    value.metadata?.effort,
+    value.metadata?.reasoningEffort,
+    value.reasoning?.effort,
+    value.model?.reasoningEffort,
+  ];
+
+  for (const candidate of candidates) {
+    const effort = extractEffortFromPayload(candidate);
+    if (effort) return effort;
+  }
+
+  return '';
+}
+
+function extractModelFromParams(params = {}, direction) {
+  if (!params || typeof params !== 'object') return '';
+  const requested = String(direction ?? '').toLowerCase();
+  if (requested === 'from') {
+    return extractModelFromPayload(
+      params.fromModel ??
+      params.previousModel ??
+      params.prevModel ??
+      params.model?.from ??
+      params.model?.previous ??
+      params.model?.old
+    );
+  }
+  if (requested === 'to') {
+    return extractModelFromPayload(
+      params.toModel ??
+      params.nextModel ??
+      params.currentModel ??
+      params.model?.to ??
+      params.model?.next ??
+      params.model?.current
+    );
+  }
+  return extractModelFromPayload(params.model ?? params.modelName ?? params.modelId ?? params.providerModel ?? params.model?.name ?? params.model?.id);
+}
+
+function normalizeModelValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
+  return text;
 }
 
 function textFromContent(content) {
@@ -594,6 +1066,110 @@ function mediaFromDataUrl(dataUrl) {
   return { type: 'image', src: `/api/media/${id}`, contentType };
 }
 
+function mediaFromLocalImagePath(filePath) {
+  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
+  if (!existsSync(target)) return null;
+  const ext = path.extname(target).toLowerCase();
+  const contentType = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+  }[ext];
+  if (!contentType) return null;
+  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target });
+  return { type: 'image', src: `/api/media/${id}`, contentType };
+}
+
+function localFileContentType(filePath) {
+  const ext = path.extname(String(filePath ?? '')).toLowerCase();
+  return {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.m4v': 'video/mp4',
+    '.cpp': 'text/plain; charset=utf-8',
+    '.h': 'text/plain; charset=utf-8',
+    '.hpp': 'text/plain; charset=utf-8',
+    '.cs': 'text/plain; charset=utf-8',
+    '.js': 'text/plain; charset=utf-8',
+    '.mjs': 'text/plain; charset=utf-8',
+    '.ts': 'text/plain; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.log': 'text/plain; charset=utf-8',
+    '.diff': 'text/plain; charset=utf-8',
+    '.patch': 'text/plain; charset=utf-8',
+    '.pdf': 'application/pdf',
+  }[ext] ?? 'application/octet-stream';
+}
+
+function mediaFromLocalFilePath(filePath) {
+  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
+  if (!existsSync(target)) return null;
+  try { if (!statSync(target).isFile()) return null; } catch { return null; }
+  const contentType = localFileContentType(target);
+  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
+  return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
+}
+
+function rewriteMarkdownLocalFileLinks(text) {
+  return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
+    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
+    const media = mediaFromLocalFilePath(target);
+    const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
+    return media ? `![${alt}](${media.src}?kind=${kind})` : match;
+  }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
+    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
+    const media = mediaFromLocalFilePath(target);
+    return media ? `[${label}](${media.src})` : match;
+  });
+}
+
+function rewriteLocalFileReferences(text, cwd = '') {
+  return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(text), cwd), cwd);
+}
+
+function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
+  return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
+    const resolved = resolveMentionedFilePath(rawPath, cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    return media ? `[${rawPath}](${media.src})` : match;
+  });
+}
+
+function resolveMentionedFilePath(rawPath, cwd = '') {
+  const cleaned = String(rawPath ?? '').trim().replace(/^[\'"`(<\[]+|[\'"`)>\].,;:]+$/g, '');
+  if (!cleaned) return '';
+  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
+  if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
+  if (!/[\\/]/.test(cleaned)) return '';
+  const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
+  return existsSync(resolved) ? resolved : '';
+}
+
+function rewriteBareLocalFilePaths(text, cwd = '') {
+  const source = String(text ?? '');
+  return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
+    const resolved = resolveMentionedFilePath(rawPath, cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    return media ? `${prefix}[${rawPath}](${media.src})` : match;
+  });
+}
+
 function compactContentParts(content) {
   if (!Array.isArray(content)) return [];
   return content.map((part) => {
@@ -606,6 +1182,10 @@ function compactContentParts(content) {
       const media = mediaFromDataUrl(part?.url ?? part?.image_url);
       return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
     }
+    if (type === 'localimage' || type === 'local_image') {
+      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path);
+      return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
+    }
     return null;
   }).filter(Boolean);
 }
@@ -615,12 +1195,12 @@ function truncate(value, max = 12000) {
   return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
 }
 
-function compactItem(item) {
+function compactItem(item, cwd = '') {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
   if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(item.text) };
+  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
   if (type === 'commandExecution') {
     return {
       ...base,
@@ -630,7 +1210,7 @@ function compactItem(item) {
       output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
     };
   }
-  if (type === 'reasoning') return { ...base, text: truncate(item.text ?? item.summary ?? '') };
+  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', cwd)) };
 
   const json = JSON.stringify(item, null, 2);
   return { ...base, text: truncate(json, 6000) };
@@ -672,6 +1252,23 @@ function filterThreads(threads, params) {
   });
 
   return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, limit);
+}
+
+function listThreadOptionsFromParams(params) {
+  const q = (params.get('q') ?? params.get('query') ?? '').trim();
+  const repo = (params.get('repo') ?? '').trim();
+  const branch = (params.get('branch') ?? '').trim();
+  const source = (params.get('source') ?? '').trim();
+  const cwd = (params.get('cwd') ?? '').trim();
+  const includeArchived = params.get('archived') === '1' || params.get('archived') === 'true';
+  const needsLocalFilterWindow = Boolean(repo || branch);
+  return {
+    includeArchived,
+    limit: needsLocalFilterWindow ? 500 : params.get('limit'),
+    searchTerm: q,
+    cwd,
+    sourceKinds: source ? [source] : defaultSourceKinds,
+  };
 }
 
 function buildFacets(threads) {
@@ -837,12 +1434,34 @@ async function readTurnPayload(req) {
     return {
       cwd: parts.find((part) => part.name === 'cwd')?.data.toString('utf8') ?? '',
       prompt: parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '',
+      approvalPolicy: parts.find((part) => part.name === 'approvalPolicy')?.data.toString('utf8') ?? '',
+      sandboxPolicy: parts.find((part) => part.name === 'sandboxPolicy')?.data.toString('utf8') ?? '',
+      networkAccess: parts.find((part) => part.name === 'networkAccess')?.data.toString('utf8') ?? '',
       files: parts.filter((part) => part.name === 'files' && part.filename),
     };
   }
 
   const body = await readJson(req);
   return { ...body, prompt: String(body.prompt ?? ''), files: [] };
+}
+
+function turnOverridesFromPayload(payload = {}) {
+  const overrides = {};
+  const approvalPolicy = String(payload.approvalPolicy ?? '').trim();
+  if (['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(approvalPolicy)) {
+    overrides.approvalPolicy = approvalPolicy;
+  }
+
+  const sandboxPolicy = String(payload.sandboxPolicy ?? '').trim();
+  if (sandboxPolicy === 'readOnly') {
+    overrides.sandboxPolicy = { type: 'readOnly' };
+  } else if (sandboxPolicy === 'workspaceWrite') {
+    overrides.sandboxPolicy = { type: 'workspaceWrite', networkAccess: payload.networkAccess === 'true' || payload.networkAccess === true || payload.networkAccess === 'on' };
+  } else if (sandboxPolicy === 'dangerFullAccess') {
+    overrides.sandboxPolicy = { type: 'dangerFullAccess' };
+  }
+
+  return overrides;
 }
 
 async function buildTurnInput(threadId, thread, reqOrPayload) {
@@ -890,6 +1509,94 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+async function probeDirectoryWrite(dir) {
+  const targetDir = String(dir ?? '').trim();
+  if (!targetDir) return { canWrite: false, reason: 'No directory available.' };
+  const probePath = path.join(targetDir, `.codex-control-probe-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    await writeFile(probePath, 'probe');
+    await rm(probePath, { force: true });
+    return { canWrite: true };
+  } catch (error) {
+    return { canWrite: false, reason: error.message };
+  }
+}
+
+function resolveGitPath(baseDir, value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return path.isAbsolute(text) ? path.normalize(text) : path.resolve(baseDir, text);
+}
+
+function parentRepoFromGitCommonDir(gitCommonDir) {
+  const normalized = path.normalize(String(gitCommonDir ?? ''));
+  const lower = normalized.toLowerCase();
+  const marker = `${path.sep}.git${path.sep}`;
+  const index = lower.indexOf(marker);
+  if (index !== -1) return normalized.slice(0, index);
+  if (lower.endsWith(`${path.sep}.git`)) return path.dirname(normalized);
+  return '';
+}
+
+async function runtimeDiagnostics() {
+  await codex.ready;
+  const git = {
+    branch: '',
+    worktreeRoot: rootDir,
+    gitCommonDir: '',
+    repositoryRoot: '',
+    status: '',
+    error: '',
+  };
+
+  try {
+    const [branch, worktreeRoot, gitCommonDir, status] = await Promise.all([
+      execFileText('git', ['-C', rootDir, 'branch', '--show-current']).catch(() => ''),
+      execFileText('git', ['-C', rootDir, 'rev-parse', '--show-toplevel']).catch(() => rootDir),
+      execFileText('git', ['-C', rootDir, 'rev-parse', '--git-common-dir']).catch(() => ''),
+      execFileText('git', ['-C', rootDir, 'status', '--short', '--branch']).catch(() => ''),
+    ]);
+    git.branch = branch.trim();
+    git.worktreeRoot = resolveGitPath(rootDir, worktreeRoot.trim()) || rootDir;
+    git.gitCommonDir = resolveGitPath(rootDir, gitCommonDir.trim());
+    git.repositoryRoot = parentRepoFromGitCommonDir(git.gitCommonDir) || git.worktreeRoot;
+    git.status = status.trim();
+  } catch (error) {
+    git.error = error.message;
+  }
+
+  const worktreeAccess = await probeDirectoryWrite(rootDir);
+  const gitAccess = git.gitCommonDir ? await probeDirectoryWrite(git.gitCommonDir) : { canWrite: false, reason: 'Git common directory was not found.' };
+  const canCommit = Boolean(worktreeAccess.canWrite && gitAccess.canWrite);
+  const recommendedWritableRoot = git.repositoryRoot || git.worktreeRoot || rootDir;
+
+  return {
+    server: {
+      cwd: process.cwd(),
+      rootDir,
+      publicDir,
+      host,
+      port,
+      codexHome: codex.codexHome,
+      node: process.version,
+    },
+    git,
+    access: {
+      worktree: worktreeAccess,
+      gitMetadata: gitAccess,
+      canCommit,
+      recommendedWritableRoot,
+      currentSessionCanChangePermissions: false,
+      permissionMutationSupported: true,
+      permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
+    },
+    commands: {
+      restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'node\\s+src\\\\server\\.mjs|node\\s+src/server\\.mjs' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask -TaskName 'codex-control'; Start-Sleep -Seconds 3; (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:${port}/api/health').StatusCode"`,
+      neededAccess: `Allow this Codex session to write: ${recommendedWritableRoot}`,
+    },
+  };
+}
+
 function sendMedia(res, id) {
   const media = mediaById.get(id);
   if (!media) {
@@ -900,7 +1607,12 @@ function sendMedia(res, id) {
   res.writeHead(200, {
     'content-type': media.contentType,
     'cache-control': 'no-store',
+    ...(media.filename ? { 'content-disposition': `inline; filename="${String(media.filename).replace(/"/g, '')}"` } : {}),
   });
+  if (media.filePath) {
+    createReadStream(media.filePath).pipe(res);
+    return;
+  }
   res.end(media.data);
 }
 
@@ -933,6 +1645,11 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/health') {
       const info = await codex.ready;
       sendJson(res, 200, { ok: true, ...info });
+      return;
+    }
+
+    if (url.pathname === '/api/runtime' && req.method === 'GET') {
+      sendJson(res, 200, await runtimeDiagnostics());
       return;
     }
 
@@ -969,8 +1686,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const includeArchived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true';
-      const threads = await codex.listThreads({ includeArchived, limit: url.searchParams.get('limit') });
+      const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
       sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
       return;
     }
@@ -979,11 +1695,12 @@ const server = createServer(async (req, res) => {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
       if (!cwd) throw new Error('Choose a worktree first.');
-      const started = await codex.startThread(cwd);
+      const overrides = turnOverridesFromPayload(payload);
+      const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;
       if (threadId && (String(payload.prompt ?? '').trim() || payload.files?.length)) {
         const input = await buildTurnInput(threadId, started.thread, payload);
-        await codex.startTurn(threadId, input);
+        await codex.startTurn(threadId, input, overrides);
       }
       sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
       return;
@@ -1012,8 +1729,28 @@ const server = createServer(async (req, res) => {
     if (turnMatch && req.method === 'POST') {
       const threadId = decodeURIComponent(turnMatch[1]);
       const data = await codex.readThread(threadId);
-      const input = await buildTurnInput(threadId, data.thread, req);
-      sendJson(res, 200, await codex.startTurn(threadId, input));
+      const payload = await readTurnPayload(req);
+      const input = await buildTurnInput(threadId, data.thread, payload);
+      await codex.resumeThread(threadId);
+      sendJson(res, 200, await codex.startTurn(threadId, input, turnOverridesFromPayload(payload)));
+      return;
+    }
+
+    const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move)$/);
+    if (queueActionMatch && req.method === 'POST') {
+      const threadId = decodeURIComponent(queueActionMatch[1]);
+      const queuedId = decodeURIComponent(queueActionMatch[2]);
+      const action = queueActionMatch[3];
+      if (action === 'remove') {
+        sendJson(res, 200, { removed: codex.removeQueuedMessage(threadId, queuedId) });
+        return;
+      }
+      if (action === 'move') {
+        const body = await readJson(req);
+        sendJson(res, 200, { queuedMessages: codex.moveQueuedMessage(threadId, queuedId, body.direction) });
+        return;
+      }
+      sendJson(res, 200, await codex.steerQueuedMessage(threadId, queuedId));
       return;
     }
 
