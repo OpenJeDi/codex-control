@@ -1011,9 +1011,11 @@ function renderRuntimeDiagnostics(data) {
         ['Codex home', server.codexHome || '-'],
         ['Node', server.node || '-'],
       ])}
-      ${renderRuntimeCard('Worktree config', data.config?.defaultWorktreeWorkflow || 'auto-sibling', 'ok', [
+      ${renderRuntimeCard('Worktree config', data.config?.defaultWorktreeWorkflow || 'auto-sibling', data.config?.warnings?.length ? 'warn' : 'ok', [
+        ['Config loaded', data.config?.exists ? 'yes' : 'no'],
         ['Workspace roots', (data.config?.workspaceRoots || []).join('\n') || '-'],
         ['Workflows', Object.entries(data.config?.worktreeWorkflows || {}).map(([id, item]) => `${id}: ${item.label || id}`).join('\n') || '-'],
+        ['Warnings', (data.config?.warnings || []).join('\n') || '-'],
       ])}
     </div>
     <section class="runtime-section">

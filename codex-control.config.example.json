@@ -4,6 +4,14 @@
   ],
   "defaultWorktreeWorkflow": "bare-container",
   "worktreeWorkflows": {
+    "posix-bare-container": {
+      "label": "POSIX bare repo container with worktrees",
+      "branchWorktree": "{workspaceRoot}/{repoName}/worktrees/{branchName}"
+    },
+    "windows-bare-container": {
+      "label": "Windows bare repo container with worktrees",
+      "branchWorktree": "{workspaceRoot}/{repoName}/worktrees/{branchName}"
+    },
     "bare-container": {
       "label": "Bare repo container with worktrees",
       "branchWorktree": "{workspaceRoot}/{repoName}/worktrees/{branchName}"

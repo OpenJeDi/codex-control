@@ -1064,10 +1064,10 @@ const defaultConfig = {
 };
 
 async function appConfig() {
-  if (!existsSync(configPath)) return defaultConfig;
+  if (!existsSync(configPath)) return { ...defaultConfig, exists: false, warnings: ['No codex-control.config.json found; using built-in worktree defaults.'] };
   try {
     const parsed = JSON.parse(await readFile(configPath, 'utf8'));
-    return {
+    const config = {
       ...defaultConfig,
       ...parsed,
       workspaceRoots: Array.isArray(parsed.workspaceRoots) ? parsed.workspaceRoots : defaultConfig.workspaceRoots,
@@ -1076,10 +1076,65 @@ async function appConfig() {
         ...(parsed.worktreeWorkflows && typeof parsed.worktreeWorkflows === 'object' ? parsed.worktreeWorkflows : {}),
       },
     };
+    return { ...config, exists: true, warnings: validateAppConfig(config) };
   } catch (error) {
     console.warn('[codex-control] failed to read codex-control.config.json:', error.message);
-    return defaultConfig;
+    return { ...defaultConfig, exists: true, warnings: [`Failed to read codex-control.config.json: ${error.message}`] };
   }
+}
+
+const configTemplateVariables = new Set([
+  'workspaceRoot',
+  'repoName',
+  'sourcePath',
+  'sourceParent',
+  'sourceName',
+  'autoWorktreeRoot',
+  'branchName',
+  'branchFolder',
+]);
+
+function validateAppConfig(config) {
+  const warnings = [];
+  if (!Array.isArray(config.workspaceRoots) || !config.workspaceRoots.length) {
+    warnings.push('No workspaceRoots configured; templates using {workspaceRoot} will resolve relative to the selected source worktree.');
+  }
+  for (const root of config.workspaceRoots ?? []) {
+    const text = String(root ?? '').trim();
+    if (!text) {
+      warnings.push('workspaceRoots contains an empty entry.');
+    } else if (!existsSync(text)) {
+      warnings.push(`Workspace root does not exist on the server host: ${text}`);
+    }
+  }
+
+  const workflows = config.worktreeWorkflows && typeof config.worktreeWorkflows === 'object' ? config.worktreeWorkflows : {};
+  const workflowId = String(config.defaultWorktreeWorkflow || '');
+  if (!workflowId) {
+    warnings.push('defaultWorktreeWorkflow is empty; auto-sibling will be used.');
+  } else if (!workflows[workflowId]) {
+    warnings.push(`defaultWorktreeWorkflow '${workflowId}' is not defined; auto-sibling will be used.`);
+  }
+
+  for (const [id, workflow] of Object.entries(workflows)) {
+    if (!workflow || typeof workflow !== 'object') {
+      warnings.push(`Workflow '${id}' is not an object.`);
+      continue;
+    }
+    if (!String(workflow.branchWorktree ?? '').trim()) {
+      warnings.push(`Workflow '${id}' has no branchWorktree template.`);
+    }
+    for (const variable of templateVariablesIn(workflow.branchWorktree)) {
+      if (!configTemplateVariables.has(variable)) {
+        warnings.push(`Workflow '${id}' uses unknown template variable {${variable}}.`);
+      }
+    }
+  }
+  return warnings;
+}
+
+function templateVariablesIn(value) {
+  return [...String(value ?? '').matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((match) => match[1]);
 }
 
 function branchFolderName(branch) {
@@ -1888,6 +1943,8 @@ async function runtimeDiagnostics() {
         : 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
     },
     config: {
+      exists: config.exists,
+      warnings: config.warnings ?? [],
       workspaceRoots: config.workspaceRoots,
       defaultWorktreeWorkflow: config.defaultWorktreeWorkflow,
       worktreeWorkflows: Object.fromEntries(Object.entries(config.worktreeWorkflows ?? {}).map(([id, workflow]) => [id, { label: workflow?.label || id }])),
