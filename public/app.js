@@ -528,6 +528,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
             <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
             <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
           </div>
+          ${renderEventTimeline(timelineEvents)}
         </div>
       </details>
       <div class="detail-actions">
@@ -537,7 +538,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
       </div>
     </div>
     <div class="detail">
-      ${renderEventTimeline(timelineEvents)}
       ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
       ${renderBusyIndicator(thread)}
     </div>
