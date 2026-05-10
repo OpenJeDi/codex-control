@@ -36,7 +36,7 @@ export function listTranscriptItemParsers() {
 addParser(blockParsers, imageGenerationParser);
 addParser(itemParsers, commandExecutionParser);
 
-function createRenderer(registry, context = {}, fallback = () => '') {
+function createRenderer(registry, context = {}) {
   return (entries = []) => {
     if (!Array.isArray(entries) || !entries.length) return '';
     const rendered = entries.map((entry) => {
