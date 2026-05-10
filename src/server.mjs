@@ -225,7 +225,7 @@ class CodexAppServer {
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
+      turns: resolvedTurns.map((turn) => normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
       queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
       permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
@@ -896,7 +896,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
+function normalizeTranscriptTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
   return {
     id: turn.id,
     status: turn.status,
