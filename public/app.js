@@ -62,7 +62,7 @@ function statusLabel(thread) {
   const raw = statusType(thread);
   const normalized = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   return ({
-    notloaded: 'not loaded',
+    notloaded: 'inactive',
     active: 'active',
     idle: 'idle',
     externalactive: 'active',
@@ -79,20 +79,25 @@ function isBusyThread(thread) {
   return busyStatusTypes.has(statusClass(thread));
 }
 
+function normalizeModelValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
+  return text;
+}
+
 function modelFromValue(value) {
   if (value == null) return '';
-  if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  if (typeof value === 'string') return normalizeModelValue(value);
+  if (typeof value === 'number' || typeof value === 'bigint') return normalizeModelValue(String(value));
   if (typeof value !== 'object') return '';
   const candidates = [
     value.model,
     value.name,
     value.id,
     value.value,
-    value.modelProvider,
     value.providerModel,
     value.currentModel,
-    value.model_provider,
     value.model_name,
     value.current_model,
     value.provider_model,

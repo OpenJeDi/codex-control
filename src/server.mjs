@@ -790,13 +790,11 @@ function extractModelFromPayload(value) {
     value.name,
     value.id,
     value.value,
-    value.modelProvider,
     value.providerModel,
     value.modelName,
     value.modelName?.name,
     value.currentModel,
     value.currentModel?.name,
-    value.model_provider,
     value.model_name,
     value.current_model,
     value.provider_model,
@@ -847,6 +845,7 @@ function extractModelFromParams(params = {}, direction) {
 function normalizeModelValue(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return '';
   return text;
 }
 
