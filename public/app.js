@@ -1246,10 +1246,10 @@ function renderInlineMarkdown(text) {
     return token;
   });
   html = escapeHtml(html);
+  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
   html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
   for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
   return html;
 }
