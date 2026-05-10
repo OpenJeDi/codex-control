@@ -347,6 +347,24 @@ function displayRepo(originUrl) {
   return text.replace(/\.git$/, '');
 }
 
+function repoWebUrl(originUrl) {
+  const text = String(originUrl ?? '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text.replace(/\.git$/, '');
+  const ssh = text.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  const sshUrl = text.match(/^ssh:\/\/git@([^/]+)\/(.+?)(?:\.git)?$/);
+  if (sshUrl) return `https://${sshUrl[1]}/${sshUrl[2]}`;
+  return '';
+}
+
+function renderRepoLink(originUrl) {
+  const label = displayRepo(originUrl);
+  const url = repoWebUrl(originUrl);
+  if (!url) return escapeHtml(originUrl || '');
+  return `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
 function customRepos() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CUSTOM_REPOS_KEY) || '[]');
@@ -1328,7 +1346,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
             <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
             <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
             <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
-            <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
+            <strong>Repo</strong><span>${renderRepoLink(thread.gitInfo?.originUrl)}</span>
             <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
             <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
           </div>
