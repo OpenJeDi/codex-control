@@ -556,9 +556,10 @@ function shouldUseRolloutModelHints(thread, turns = []) {
       || thread?.metadata?.model
       || thread?.provider?.model,
   );
-  if (!threadModel) return true;
+  const threadEffort = extractEffortFromPayload(thread);
+  if (!threadModel || !threadEffort) return true;
   for (const turn of turns ?? []) {
-    if (!extractModelFromPayload(turn)) return true;
+    if (!extractModelFromPayload(turn) || !extractEffortFromPayload(turn)) return true;
   }
   return false;
 }
@@ -621,8 +622,11 @@ function getRolloutTurnId(event) {
 
 async function readRolloutModelInfo(filePath) {
   const turnModels = new Map();
+  const turnEfforts = new Map();
   let threadModel = '';
+  let threadEffort = '';
   const seenTurnModels = new Map();
+  const seenTurnEfforts = new Map();
 
   try {
     const input = createReadStream(filePath, { encoding: 'utf8' });
@@ -639,12 +643,17 @@ async function readRolloutModelInfo(filePath) {
         continue;
       }
 
-      const model = extractModelFromPayload(event.payload ?? event);
+      const payload = event.payload ?? event;
+      const model = extractModelFromPayload(payload);
+      const effort = extractEffortFromPayload(payload);
+      const turnId = getRolloutTurnId(event);
       if (model) {
         if (event?.type === 'session_meta' || !threadModel) threadModel = model;
-
-        const turnId = getRolloutTurnId(event);
         if (turnId) seenTurnModels.set(turnId, model);
+      }
+      if (effort) {
+        if (event?.type === 'session_meta' || !threadEffort) threadEffort = effort;
+        if (turnId) seenTurnEfforts.set(turnId, effort);
       }
     }
   } catch {
@@ -654,10 +663,15 @@ async function readRolloutModelInfo(filePath) {
   for (const [turnId, model] of seenTurnModels.entries()) {
     if (model) turnModels.set(turnId, model);
   }
+  for (const [turnId, effort] of seenTurnEfforts.entries()) {
+    if (effort) turnEfforts.set(turnId, effort);
+  }
 
   return {
     threadModel,
+    threadEffort,
     turnModels,
+    turnEfforts,
   };
 }
 
@@ -666,22 +680,33 @@ const rolloutModelInfoCache = new Map();
 function applyRolloutModelHints(turns, rolloutInfo) {
   if (!rolloutInfo || !turns?.length) return turns;
   const turnModels = rolloutInfo.turnModels ?? new Map();
+  const turnEfforts = rolloutInfo.turnEfforts ?? new Map();
 
   return turns.map((turn) => {
     if (!turn?.id) return turn;
-    if (extractModelFromPayload(turn)) return turn;
-    const fromRollout = extractModelFromPayload(turnModels.get(String(turn.id)));
-    return fromRollout ? { ...turn, model: fromRollout } : turn;
+    const fromRolloutModel = extractModelFromPayload(turnModels.get(String(turn.id)));
+    const fromRolloutEffort = extractEffortFromPayload(turnEfforts.get(String(turn.id)));
+    return {
+      ...turn,
+      ...(extractModelFromPayload(turn) || !fromRolloutModel ? {} : { model: fromRolloutModel }),
+      ...(extractEffortFromPayload(turn) || !fromRolloutEffort ? {} : { effort: fromRolloutEffort }),
+    };
   });
 }
 
 function applyRolloutModelHintsToThread(thread, rolloutInfo, turns = []) {
   if (!thread || !rolloutInfo) return thread;
   const currentThreadModel = extractModelFromPayload(thread.model);
-  if (currentThreadModel) return thread;
+  const currentThreadEffort = extractEffortFromPayload(thread);
   const fromTurns = [...turns].map((turn) => extractModelFromPayload(turn)).filter(Boolean).pop() || '';
+  const effortFromTurns = [...turns].map((turn) => extractEffortFromPayload(turn)).filter(Boolean).pop() || '';
   const fromRollout = extractModelFromPayload(rolloutInfo.threadModel) || fromTurns;
-  return fromRollout ? { ...thread, model: fromRollout } : thread;
+  const effortFromRollout = extractEffortFromPayload(rolloutInfo.threadEffort) || effortFromTurns;
+  return {
+    ...thread,
+    ...(currentThreadModel || !fromRollout ? {} : { model: fromRollout }),
+    ...(currentThreadEffort || !effortFromRollout ? {} : { effort: effortFromRollout }),
+  };
 }
 
 async function inferExternalThreadStatus(thread) {
@@ -1138,7 +1163,7 @@ function resolveMentionedFilePath(rawPath, cwd = '') {
 
 function rewriteBareLocalFilePaths(text, cwd = '') {
   const source = String(text ?? '');
-  return source.replace(/(^|[\s(\[<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
+  return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
     const resolved = resolveMentionedFilePath(rawPath, cwd);
     const media = resolved ? mediaFromLocalFilePath(resolved) : null;
     return media ? `${prefix}[${rawPath}](${media.src})` : match;
