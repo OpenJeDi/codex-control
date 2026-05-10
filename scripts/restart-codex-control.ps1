@@ -8,14 +8,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
-$serverPattern = 'node\s+src\\server\.mjs|node\s+src/server\.mjs'
+$serverPattern = '(?i)(?:node(?:\.exe)?["'']?\s+src[\\/]+server\.mjs|src[\\/]+server\.mjs)'
 
 Write-Host "Stopping existing Codex Control node processes..."
-Get-CimInstance Win32_Process |
+$processIds = @()
+$processIds += Get-CimInstance Win32_Process |
   Where-Object { $_.CommandLine -match $serverPattern } |
+  ForEach-Object { $_.ProcessId }
+$processIds += Get-NetTCPConnection -LocalPort 4567 -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object { $_.OwningProcess }
+
+$processIds |
+  Where-Object { $_ } |
+  Select-Object -Unique |
   ForEach-Object {
-    Write-Host "Stopping PID $($_.ProcessId): $($_.CommandLine)"
-    Stop-Process -Id $_.ProcessId -Force
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction SilentlyContinue
+    Write-Host "Stopping PID ${_}: $($process.CommandLine)"
+    Stop-Process -Id $_ -Force
   }
 
 if ($TaskName) {
