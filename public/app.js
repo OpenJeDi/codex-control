@@ -541,7 +541,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
       </div>
     </div>
     <div class="detail">
-      ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
+      ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
       ${renderBusyIndicator(thread)}
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
@@ -692,33 +692,36 @@ async function submitPrompt(event, id) {
   }
 }
 
-function renderTurn(turn, index) {
-  const status = String(turn.status ?? '').toLowerCase();
+function renderTurn(turn, index, thread) {
+  const activeLatestTurn = index === 0 && isBusyThread(thread);
+  const statusValue = activeLatestTurn ? statusLabel(thread) : turn.status;
+  const status = String(statusValue ?? '').toLowerCase();
   const model = modelFromValue(turn);
   const summary = turnSummary(turn);
   const innerItems = [
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
     ...(summary.hiddenItems ?? []).map(renderItem),
     ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
-    renderTurnBreak(turn),
+    renderTurnBreak(turn, statusValue, isBusyThread(thread)),
   ].filter(Boolean);
   const hasInnerItems = innerItems.length > 0;
-  return `<details class="turn ${escapeHtml(status)}">
-    <summary class="turn-summary">
-      <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
-      <div class="turn-compact">
-        <article>
-          <div class="item-type">Prompt</div>
-          ${renderMarkdownText(summary.prompt || '(no prompt text)')}
-        </article>
-        <article>
-          <div class="item-type">Response</div>
-          ${renderMarkdownText(summary.response || '(no response yet)')}
-        </article>
-      </div>
-    </summary>
-    ${hasInnerItems ? `<div class="turn-full">${innerItems.join('')}</div>` : ''}
-  </details>`;
+  return `<section class="turn ${escapeHtml(status)}">
+    <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
+    <div class="turn-compact">
+      <article>
+        <div class="item-type">Prompt</div>
+        ${renderMarkdownText(summary.prompt || '(no prompt text)')}
+      </article>
+      ${hasInnerItems ? `<details class="turn-details">
+        <summary>Intermediate activity</summary>
+        <div class="turn-full">${innerItems.join('')}</div>
+      </details>` : ''}
+      <article>
+        <div class="item-type">Response</div>
+        ${renderMarkdownText(summary.response || '(no response yet)')}
+      </article>
+    </div>
+  </section>`;
 }
 
 function textForItem(item) {
@@ -752,8 +755,9 @@ function renderSteeredMessage(message) {
   </div>`;
 }
 
-function renderTurnBreak(turn) {
-  const status = String(turn.status ?? '').toLowerCase();
+function renderTurnBreak(turn, statusOverride = turn.status, suppressInterrupted = false) {
+  const status = String(statusOverride ?? '').toLowerCase();
+  if (suppressInterrupted && status === 'interrupted') return '';
   if (status === 'interrupted') return '<div class="turn-break interrupted">Run stopped</div>';
   if (status === 'failed' || status === 'error') return '<div class="turn-break error">Run failed</div>';
   return '';
