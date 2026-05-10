@@ -5,11 +5,21 @@ export const commandExecutionParser = {
   render(item, context = {}, renderContext = {}) {
     const escapeHtml = context.escapeHtml || ((value) => String(value ?? ''));
     const escapeAttribute = context.escapeAttribute || ((value) => String(value ?? ''));
+    const renderCompactDetailsItem = context.renderCompactDetailsItem;
     const label = renderContext.label || 'Command';
     const command = String(item?.command ?? item?.cmd ?? item?.argv?.join(' ') ?? '').trim();
     const output = String(item?.output ?? item?.stdout ?? item?.stderr ?? '');
     const body = command ? `$ ${command}\n\n${output}` : String(item?.text ?? output ?? '');
     const preview = body.slice(0, 220).replace(/\s+/g, ' ').trim();
+
+    if (typeof renderCompactDetailsItem === 'function') {
+      return renderCompactDetailsItem({
+        type: item?.type || 'commandExecution',
+        label,
+        body,
+        preview,
+      });
+    }
 
     return `<article class="item ${escapeAttribute(item?.type || 'commandExecution')} compact-item">
       <details>

@@ -1,10 +1,14 @@
 function toImagesHtml(images = [], context = {}) {
   const escapeHtml = context.escapeHtml || ((value) => String(value ?? ''));
   const escapeAttribute = context.escapeAttribute || ((value) => String(value ?? ''));
+  const renderSessionImageFigure = context.renderSessionImageFigure;
   const renderImage = (image, index) => {
     const src = String(image?.src ?? '').trim();
     if (!src) return '';
     const caption = image.filename || image.alt || `generated-image-${index + 1}`;
+    if (typeof renderSessionImageFigure === 'function') {
+      return renderSessionImageFigure(src, caption, caption);
+    }
     return `<figure class="session-image">
       <img src="${escapeAttribute(src)}" alt="${escapeAttribute(caption)}" loading="lazy">
       <figcaption>${escapeHtml(caption)}</figcaption>
