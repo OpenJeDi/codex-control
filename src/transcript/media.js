@@ -39,15 +39,24 @@ export function createTranscriptMediaHelpers({ mediaById }) {
     return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
   }
 
+  function renderableMediaFromLocalFilePath(filePath) {
+    const media = mediaFromLocalFilePath(filePath);
+    return isRenderableTranscriptMedia(media) ? media : null;
+  }
+
+  function isRenderableTranscriptMedia(media) {
+    return /^image\/|^video\//.test(String(media?.contentType ?? ''));
+  }
+
   function rewriteMarkdownLocalFileLinks(text) {
     return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const media = mediaFromLocalFilePath(target);
+      const media = renderableMediaFromLocalFilePath(target);
       const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
       return media ? `![${alt}](${media.src}?kind=${kind})` : match;
     }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const media = mediaFromLocalFilePath(target);
+      const media = renderableMediaFromLocalFilePath(target);
       return media ? `[${label}](${media.src})` : match;
     });
   }
@@ -62,7 +71,7 @@ export function createTranscriptMediaHelpers({ mediaById }) {
   function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
     return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
       const resolved = resolveMentionedFilePath(rawPath, cwd);
-      const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+      const media = resolved ? renderableMediaFromLocalFilePath(resolved) : null;
       return media ? `[${rawPath}](${media.src})` : match;
     });
   }
@@ -81,7 +90,7 @@ export function createTranscriptMediaHelpers({ mediaById }) {
     const source = String(text ?? '');
     return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
       const resolved = resolveMentionedFilePath(rawPath, cwd);
-      const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+      const media = resolved ? renderableMediaFromLocalFilePath(resolved) : null;
       return media ? `${prefix}[${rawPath}](${media.src})` : match;
     });
   }
