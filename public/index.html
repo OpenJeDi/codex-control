@@ -74,7 +74,10 @@
 
       <label>
         Repo
-        <select id="newRepoSelect" name="repo"></select>
+        <div class="combo-action-row">
+          <select id="newRepoSelect" name="repo"></select>
+          <button id="addRepoButton" class="icon-button" type="button" title="Add repository">+</button>
+        </div>
       </label>
 
       <label>
@@ -115,13 +118,42 @@
       </label>
 
       <div class="modal-actions">
-        <span></span>
+        <span class="modal-spacer"></span>
         <button id="cancelNewSession" type="button">Cancel</button>
         <button type="submit">Start session</button>
       </div>
     </form>
   </dialog>
 
+  <dialog id="addRepoDialog" class="modal">
+    <form id="addRepoForm" class="modal-card" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>Add repository</strong>
+          <p>Add a repository URL or owner/name. Codex Control will use it for session and worktree discovery.</p>
+        </div>
+        <button id="closeAddRepo" type="button" title="Close">×</button>
+      </div>
+
+      <label>
+        Repository
+        <input id="repoUrlInput" name="repo" type="text" placeholder="OpenJeDi/codex-control" autocomplete="off">
+      </label>
+
+      <div class="plan-summary">
+        <div><strong>Display</strong><span id="repoDisplayPreview">-</span></div>
+        <div><strong>Stored value</strong><span id="repoValuePreview">-</span></div>
+      </div>
+
+      <div id="repoError" class="hint error-text"></div>
+
+      <div class="modal-actions">
+        <span class="modal-spacer"></span>
+        <button id="cancelAddRepo" type="button">Cancel</button>
+        <button id="confirmAddRepo" type="submit" disabled>Add repository</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="createWorktreeDialog" class="modal">
     <form id="createWorktreeForm" class="modal-card" method="dialog">
       <div class="modal-head">
@@ -159,7 +191,7 @@
       <div id="planError" class="hint error-text"></div>
 
       <div class="modal-actions">
-        <span></span>
+        <span class="modal-spacer"></span>
         <button id="cancelCreateWorktree" type="button">Cancel</button>
         <button id="confirmCreateWorktree" type="submit" disabled>Create worktree</button>
       </div>

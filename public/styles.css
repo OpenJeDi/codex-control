@@ -699,3 +699,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .plan-details summary { cursor: pointer; color: var(--muted); font-weight: 700; }
 .command-preview { margin-top: 10px; color: var(--text); }
 .error-text { color: var(--danger); min-height: 18px; }
+.modal-spacer { flex: 1 1 auto; min-width: 24px; }
+.modal-actions > button { flex: 0 0 auto; }

@@ -19,6 +19,16 @@ const lightboxImage = document.querySelector('#lightboxImage');
 const newSessionDialog = document.querySelector('#newSessionDialog');
 const newSessionForm = document.querySelector('#newSessionForm');
 const newRepoSelect = document.querySelector('#newRepoSelect');
+const addRepoButton = document.querySelector('#addRepoButton');
+const addRepoDialog = document.querySelector('#addRepoDialog');
+const addRepoForm = document.querySelector('#addRepoForm');
+const closeAddRepo = document.querySelector('#closeAddRepo');
+const cancelAddRepo = document.querySelector('#cancelAddRepo');
+const confirmAddRepo = document.querySelector('#confirmAddRepo');
+const repoUrlInput = document.querySelector('#repoUrlInput');
+const repoDisplayPreview = document.querySelector('#repoDisplayPreview');
+const repoValuePreview = document.querySelector('#repoValuePreview');
+const repoError = document.querySelector('#repoError');
 const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
 const newWorktreeHint = document.querySelector('#newWorktreeHint');
 const createWorktreeButton = document.querySelector('#createWorktreeButton');
@@ -341,6 +351,45 @@ function saveSelectedRepo(repo) {
 function saveCustomRepos(repos) {
   localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
+function normalizeRepoInput(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[^\s/]+\/[^\s/]+$/.test(text) && !text.includes(':')) return `git@github.com:${text.replace(/\.git$/, '')}.git`;
+  return text;
+}
+
+function openAddRepoDialog() {
+  addRepoForm.reset();
+  repoError.textContent = '';
+  repoDisplayPreview.textContent = '-';
+  repoValuePreview.textContent = '-';
+  confirmAddRepo.disabled = true;
+  addRepoDialog.showModal();
+  repoUrlInput.focus();
+}
+
+function updateRepoPreview() {
+  const repo = normalizeRepoInput(repoUrlInput.value);
+  repoError.textContent = '';
+  repoDisplayPreview.textContent = repo ? displayRepo(repo) : '-';
+  repoValuePreview.textContent = repo || '-';
+  confirmAddRepo.disabled = !repo;
+}
+
+async function addRepository(event) {
+  event.preventDefault();
+  const repo = normalizeRepoInput(repoUrlInput.value);
+  if (!repo) return;
+  saveCustomRepos([...customRepos(), repo]);
+  updateRepoOptions([]);
+  repoFilter.value = repo;
+  newRepoSelect.value = repo;
+  saveSelectedRepo(repo);
+  addRepoDialog.close();
+  await loadNewSessionWorktrees();
+  await loadSessions();
+}
+
 
 function paramsFromForm() {
   const data = new FormData(filters);
@@ -588,8 +637,13 @@ async function createFeatureWorktree(event) {
       targetRoot: currentWorktreePlan.targetRoot,
       confirmed: true,
     });
+    const createdPath = created.worktree?.path || created.targetPath;
     createWorktreeDialog.close();
-    await loadNewSessionWorktrees(created.worktree?.path || created.targetPath);
+    await loadNewSessionWorktrees(createdPath);
+    newWorktreeSelect.value = createdPath;
+    newSessionDialog.close();
+    const started = await jsonApi('/api/threads', { cwd: createdPath });
+    if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
     planError.textContent = error.message;
@@ -1683,6 +1737,11 @@ repoFilter.addEventListener('change', () => {
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
+addRepoButton.addEventListener('click', openAddRepoDialog);
+addRepoForm.addEventListener('submit', addRepository);
+repoUrlInput.addEventListener('input', updateRepoPreview);
+closeAddRepo.addEventListener('click', () => addRepoDialog.close());
+cancelAddRepo.addEventListener('click', () => addRepoDialog.close());
 runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
