@@ -55,7 +55,7 @@ const truncate = (value, max = 12000) => {
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
-const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
+const abbreviatePath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
 const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);
@@ -569,7 +569,7 @@ async function loadNewSessionWorktrees(preferredPath = '') {
 
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
-      return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}</option>`;
+      return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(abbreviatePath(item.path))}</option>`;
     }).join('');
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
     createWorktreeButton.disabled = false;
@@ -603,7 +603,7 @@ function renderSession(session) {
   const active = session.id === activeId ? ' active' : '';
   const branch = session.gitInfo?.branch || 'no branch';
   const source = session.source || 'unknown';
-  const cwd = compactPath(session.cwd);
+  const cwd = abbreviatePath(session.cwd);
   const repo = displayRepo(session.gitInfo?.originUrl);
   const status = statusLabel(session);
   const statusCss = statusClass(session);
