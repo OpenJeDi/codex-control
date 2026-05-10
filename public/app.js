@@ -726,7 +726,7 @@ function renderTurn(turn, index, thread) {
     <div class="turn-compact">
       <article>
         <div class="item-type">Prompt</div>
-        ${renderMarkdownText(summary.prompt || '(no prompt text)')}
+        ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)') : renderMarkdownText(summary.prompt || '(no prompt text)')}
       </article>
       ${hasInnerItems ? `<details class="turn-details">
         <summary>Intermediate activity</summary>
@@ -734,7 +734,7 @@ function renderTurn(turn, index, thread) {
       </details>` : ''}
       <article>
         <div class="item-type">Response</div>
-        ${renderMarkdownText(summary.response || '(no response yet)')}
+        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response || '(no response yet)') : renderMarkdownText(summary.response || '(no response yet)')}
       </article>
     </div>
   </section>`;
@@ -760,6 +760,8 @@ function turnSummary(turn) {
   return {
     prompt: truncate(textForItem(userItem), 1800),
     response: truncate(textForItem(finalAgent), 2400),
+    promptItem: userItem,
+    responseItem: finalAgent,
     hiddenItems: items.filter((item) => item !== userItem && item !== finalAgent),
   };
 }
