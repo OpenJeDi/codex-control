@@ -24,17 +24,22 @@ let detailRefreshTimer = null;
 let isDraggingSidebar = false;
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
+const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const truncate = (value, max = 12000) => {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}\n... truncated ...` : text;
+};
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
 const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-const busyStatusTypes = new Set(['externalactive', 'running', 'inprogress']);
+const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);
 
 function ageLabel(seconds) {
   const timestamp = Number(seconds) * 1000;
@@ -58,6 +63,7 @@ function statusLabel(thread) {
   const normalized = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   return ({
     notloaded: 'not loaded',
+    active: 'active',
     idle: 'idle',
     externalactive: 'active',
     running: 'running',
@@ -71,6 +77,91 @@ function statusLabel(thread) {
 
 function isBusyThread(thread) {
   return busyStatusTypes.has(statusClass(thread));
+}
+
+function modelFromValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  if (typeof value !== 'object') return '';
+  const candidates = [
+    value.model,
+    value.name,
+    value.id,
+    value.value,
+    value.modelProvider,
+    value.providerModel,
+    value.currentModel,
+    value.model_provider,
+    value.model_name,
+    value.current_model,
+    value.provider_model,
+    value.model_id,
+    value.config?.model,
+    value.settings?.model,
+    value.metadata?.model,
+    value.provider?.model,
+    value.model?.name,
+    value.model?.id,
+    value.model?.value,
+    value.modelId,
+    value.modelName,
+  ];
+  for (const candidate of candidates) {
+    const normalized = modelFromValue(candidate);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function modelFromThread(thread = {}, turns = []) {
+  const direct = modelFromValue(thread.model)
+    || modelFromValue(thread.currentModel)
+    || modelFromValue(thread.config?.model)
+    || modelFromValue(thread.settings?.model)
+    || modelFromValue(thread.metadata?.model)
+    || modelFromValue(thread.provider?.model);
+  if (direct) return direct;
+  for (const turn of [...turns].reverse()) {
+    const model = modelFromValue(turn);
+    if (model) return model;
+  }
+  return '';
+}
+
+function inferredModelEvents(thread, turns = [], events = []) {
+  const existing = new Set(
+    (events ?? [])
+      .filter((event) => event.modelFrom || event.modelTo)
+      .map((event) => `${event.modelFrom || ''}|${event.modelTo || ''}|${event.turnId || ''}`),
+  );
+  const inferred = [];
+  const chronological = [...turns]
+    .slice()
+    .sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0));
+  let previousModel = '';
+  for (const turn of chronological) {
+    const model = modelFromValue(turn);
+    if (!model) continue;
+    if (!previousModel) {
+      previousModel = model;
+      continue;
+    }
+    if (model === previousModel) continue;
+    const key = `${previousModel}|${model}|${turn.id || ''}`;
+    if (!existing.has(key)) {
+      inferred.push({
+        at: Number(turn.startedAt) || Date.now(),
+        method: 'turn/model/changed',
+        turnId: turn.id || null,
+        message: `Model changed: ${previousModel || 'unknown'} -> ${model}`,
+        modelFrom: previousModel,
+        modelTo: model,
+      });
+    }
+    previousModel = model;
+  }
+  return inferred;
 }
 
 function isNearBottom(el, threshold = 220) {
@@ -123,6 +214,16 @@ function customRepos() {
   }
 }
 
+function savedSelectedRepo() {
+  return localStorage.getItem(SELECTED_REPO_KEY) || '';
+}
+
+function saveSelectedRepo(repo) {
+  const value = String(repo ?? '').trim();
+  if (value) localStorage.setItem(SELECTED_REPO_KEY, value);
+  else localStorage.removeItem(SELECTED_REPO_KEY);
+}
+
 function saveCustomRepos(repos) {
   localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
 }
@@ -135,6 +236,7 @@ function paramsFromForm() {
     const trimmed = String(value).trim();
     if (trimmed) params.set(key, trimmed);
   }
+  if (!params.has('repo') && savedSelectedRepo()) params.set('repo', savedSelectedRepo());
   if (filters.archived.checked) params.set('archived', '1');
   params.set('limit', '200');
   return params;
@@ -236,7 +338,7 @@ async function createFeatureWorktree() {
 }
 
 function updateRepoOptions(repos) {
-  const previous = repoFilter.value;
+  const previous = repoFilter.value || savedSelectedRepo();
   const seen = new Set();
   const options = ['<option value="">all repos</option>'];
 
@@ -246,10 +348,10 @@ function updateRepoOptions(repos) {
     options.push(`<option value="${escapeHtml(repo.value)}"${selected}>${escapeHtml(displayRepo(repo.value))} (${repo.count})</option>`);
   }
 
-  for (const repo of customRepos()) {
+  for (const repo of [...customRepos(), savedSelectedRepo()].filter(Boolean)) {
     if (seen.has(repo)) continue;
     const selected = repo === previous ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (custom)</option>`);
+    options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (saved)</option>`);
   }
 
   options.push('<option value="__add_repo__">+ Add repo...</option>');
@@ -399,31 +501,43 @@ async function loadDetail(id, { quiet = false } = {}) {
 function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
+  const model = modelFromThread(thread, turns);
+  const modelSource = thread?.modelSource || 'unknown';
+  const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return `<div class="detail-shell">
-    <div class="detail">
-      <div class="detail-head">
-        <div>
+    <div class="session-header">
+      <details class="session-meta">
+        <summary class="session-summary">
           <h2>${escapeHtml(thread.name || '(unnamed)')}</h2>
-          <div class="preview">${escapeHtml(thread.preview || '')}</div>
-        </div>
-        <div class="detail-actions">
           <span class="badge status ${escapeHtml(statusCss)}">${escapeHtml(status)}</span>
-          <button type="button" data-action="rename-thread">Rename</button>
-          <button type="button" data-action="archive-thread">Archive</button>
-          ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
+          <span class="badge model">${escapeHtml(model || 'model unknown')}</span>
+          <span>${escapeHtml(thread.gitInfo?.branch || 'no branch')}</span>
+          <span>${escapeHtml(displayRepo(thread.gitInfo?.originUrl) || 'no repo')}</span>
+        </summary>
+        <div class="session-details">
+          <div class="preview">${escapeHtml(thread.preview || '')}</div>
+          <div class="kv">
+            <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
+            <strong>Status</strong><span>${escapeHtml(status)}</span>
+            <strong>Model</strong><span>${escapeHtml(model || 'unknown')}</span>
+            <strong>Model source</strong><span>${escapeHtml(modelSource)}</span>
+            <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
+            <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
+            <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
+            <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
+            <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
+            <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
+          </div>
         </div>
+      </details>
+      <div class="detail-actions">
+        <button type="button" data-action="rename-thread">Rename</button>
+        <button type="button" data-action="archive-thread">Archive</button>
+        ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
       </div>
-      <div class="kv">
-        <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
-        <strong>Status</strong><span>${escapeHtml(status)}</span>
-        <strong>Source</strong><span>${escapeHtml(thread.source || '')}</span>
-        <strong>Updated</strong><span>${escapeHtml(fmtTime(thread.updatedAt))}</span>
-        <strong>Branch</strong><span>${escapeHtml(thread.gitInfo?.branch || '')}</span>
-        <strong>Repo</strong><span>${escapeHtml(thread.gitInfo?.originUrl || '')}</span>
-        <strong>CWD</strong><span>${escapeHtml(thread.cwd || '')}</span>
-        <strong>Path</strong><span>${escapeHtml(thread.path || '')}</span>
-      </div>
-      ${renderEventTimeline(events)}
+    </div>
+    <div class="detail">
+      ${renderEventTimeline(timelineEvents)}
       ${[...turns].reverse().map(renderTurn).join('') || '<div class="empty">No turns returned.</div>'}
       ${renderBusyIndicator(thread)}
     </div>
@@ -445,13 +559,22 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
 function renderEventTimeline(events = []) {
   const visible = events.slice(-10).reverse();
   if (!visible.length) return '';
+  const rowForModel = (event) => {
+    if (!event.modelFrom && !event.modelTo) return '';
+    const from = event.modelFrom ? `from ${escapeHtml(event.modelFrom)}` : '';
+    const to = event.modelTo ? `to ${escapeHtml(event.modelTo)}` : '';
+    return `<small class="event-model">${from}${from && to ? ' ' : ''}${to}</small>`;
+  };
   return `<section class="event-timeline" aria-label="Recent session events">
     <div class="event-title">Recent events</div>
-    ${visible.map((event) => `<div class="event-row">
+    ${visible.map((event) => {
+      const isModel = String(event.method ?? '').toLowerCase().includes('model') || !!(event.modelFrom || event.modelTo);
+      return `<div class="event-row${isModel ? ' model-change' : ''}">
       <time>${escapeHtml(fmtMillis(event.at))}</time>
       <span>${escapeHtml(event.message || event.method || 'Event')}</span>
+      ${rowForModel(event)}
       ${event.turnId ? `<code title="${escapeHtml(event.turnId)}">${escapeHtml(event.turnId.slice(0, 8))}</code>` : ''}
-    </div>`).join('')}
+    </div>`;}).join('')}
   </section>`;
 }
 
@@ -568,12 +691,51 @@ async function submitPrompt(event, id) {
 
 function renderTurn(turn, index) {
   const status = String(turn.status ?? '').toLowerCase();
-  return `<section class="turn ${escapeHtml(status)}">
-    <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
-    ${turn.items.map(renderItem).join('')}
-    ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
-    ${renderTurnBreak(turn)}
-  </section>`;
+  const model = modelFromValue(turn);
+  const summary = turnSummary(turn);
+  return `<details class="turn ${escapeHtml(status)}">
+    <summary class="turn-summary">
+      <div class="meta"><span class="badge">Turn ${index + 1}</span><span class="badge">${escapeHtml(turn.id)}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
+      <div class="turn-compact">
+        <article>
+          <div class="item-type">Prompt</div>
+          ${renderMarkdownText(summary.prompt || '(no prompt text)')}
+        </article>
+        <article>
+          <div class="item-type">Response</div>
+          ${renderMarkdownText(summary.response || '(no response yet)')}
+        </article>
+      </div>
+    </summary>
+    <div class="turn-full">
+      ${turn.items.map(renderItem).join('')}
+      ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
+      ${renderTurnBreak(turn)}
+    </div>
+  </details>`;
+}
+
+function textForItem(item) {
+  if (!item) return '';
+  if (Array.isArray(item.parts) && item.parts.length) {
+    return item.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text || '')
+      .filter(Boolean)
+      .join('\n');
+  }
+  return item.text || '';
+}
+
+function turnSummary(turn) {
+  const items = turn.items ?? [];
+  const userItem = items.find((item) => item.type === 'userMessage');
+  const agentItems = items.filter((item) => item.type === 'agentMessage');
+  const finalAgent = [...agentItems].reverse().find((item) => item.phase !== 'commentary') ?? agentItems[agentItems.length - 1];
+  return {
+    prompt: truncate(textForItem(userItem), 1800),
+    response: truncate(textForItem(finalAgent), 2400),
+  };
 }
 
 function renderSteeredMessage(message) {
@@ -803,8 +965,11 @@ filters.addEventListener('submit', (event) => event.preventDefault());
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
 repoFilter.addEventListener('change', () => {
-  if (repoFilter.value !== '__add_repo__') return;
-  const previous = [...repoFilter.options].find((option) => option.defaultSelected)?.value || '';
+  if (repoFilter.value !== '__add_repo__') {
+    saveSelectedRepo(repoFilter.value);
+    return;
+  }
+  const previous = savedSelectedRepo();
   const value = window.prompt('Paste a git repository URL to filter by:')?.trim();
   if (!value) {
     repoFilter.value = previous;
@@ -813,6 +978,7 @@ repoFilter.addEventListener('change', () => {
   saveCustomRepos([...customRepos(), value]);
   updateRepoOptions([]);
   repoFilter.value = value;
+  saveSelectedRepo(value);
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);

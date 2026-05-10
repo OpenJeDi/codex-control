@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createReadStream } from 'node:fs';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch } from 'node:fs';
 import path from 'node:path';
@@ -15,6 +16,7 @@ const host = process.env.HOST || '127.0.0.1';
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
+const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
 
 class CodexAppServer {
   constructor() {
@@ -29,6 +31,7 @@ class CodexAppServer {
     this.watchers = [];
     this.threadsChangedTimer = null;
     this.pendingChangedThreadIds = new Set();
+    this.codexHome = null;
     this.ready = this.start();
   }
 
@@ -66,6 +69,7 @@ class CodexAppServer {
     }).then((result) => {
       this.notify('initialized', {});
       this.info = result;
+      this.codexHome = result?.codexHome ?? null;
       this.watchCodexHome(result.codexHome);
       return result;
     });
@@ -149,7 +153,7 @@ class CodexAppServer {
     this.proc.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
-  async listThreads({ includeArchived = false, limit = 50 } = {}) {
+  async listThreads({ includeArchived = false, limit = 50, searchTerm = '', cwd = '', sourceKinds = defaultSourceKinds } = {}) {
     await this.ready;
     const target = Math.min(Math.max(Number(limit) || 50, 1), 500);
     const data = [];
@@ -157,7 +161,10 @@ class CodexAppServer {
 
     while (data.length < target) {
       const pageLimit = Math.min(25, target - data.length);
-      const params = { includeArchived, limit: pageLimit };
+      const params = { archived: Boolean(includeArchived), limit: pageLimit, sortKey: 'updated_at' };
+      if (Array.isArray(sourceKinds) && sourceKinds.length) params.sourceKinds = sourceKinds;
+      if (String(searchTerm ?? '').trim()) params.searchTerm = String(searchTerm).trim();
+      if (String(cwd ?? '').trim()) params.cwd = String(cwd).trim();
       if (cursor) params.cursor = cursor;
       const result = await this.request('thread/list', params);
       data.push(...(result.data ?? []));
@@ -180,9 +187,41 @@ class CodexAppServer {
     const key = String(threadId);
     const turnData = turns.data ?? [];
     this.pruneQueuedMessages(key, new Set(turnData.map((turn) => String(turn.id))));
+    const thread = await this.decorateThread(read.thread);
+    const turnModelsFromCodex = (turnData ?? []).map((turn) => extractModelFromPayload(turn));
+    const threadModelFromCodex = extractModelFromPayload(
+      thread?.model
+        || thread?.currentModel
+        || thread?.config?.model
+        || thread?.settings?.model
+        || thread?.metadata?.model
+        || thread?.provider?.model,
+    );
+    const hasAnyTurnFromCodex = turnModelsFromCodex.some((value) => Boolean(value));
+    const hasMissingTurnModelFromCodex = turnModelsFromCodex.some((value) => !Boolean(value));
+    const allTurnModelsFromCodex = turnModelsFromCodex.length && turnModelsFromCodex.every((value) => Boolean(value));
+    let modelSource = threadModelFromCodex || allTurnModelsFromCodex ? 'codex' : 'unknown';
+
+    let resolvedTurns = turnData;
+    let resolvedThread = thread;
+
+    if (shouldUseRolloutModelHints(read.thread, turnData)) {
+      const rolloutModelInfo = await getRolloutModelInfo(read.thread?.path, threadId, this.codexHome);
+      if (rolloutModelInfo) {
+        resolvedTurns = applyRolloutModelHints(turnData, rolloutModelInfo);
+        resolvedThread = applyRolloutModelHintsToThread(thread, rolloutModelInfo, resolvedTurns);
+        if (modelSource === 'codex' && hasMissingTurnModelFromCodex) {
+          modelSource = 'mixed';
+        } else if (modelSource === 'unknown') {
+          modelSource = hasAnyTurnFromCodex ? 'mixed' : 'rollout';
+        }
+      }
+    }
+
+    const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
-      thread: await this.decorateThread(read.thread),
-      turns: turnData.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
+      thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
+      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
       queuedMessages: this.queuedMessagesByThread.get(key) ?? [],
       events: this.eventsByThread.get(key) ?? [],
     };
@@ -282,12 +321,17 @@ class CodexAppServer {
     const threadId = params.threadId ?? params.id ?? thread?.id;
     if (!threadId) return;
     const turnId = params.turnId ?? params.turn?.id;
+    const modelFrom = extractModelFromParams(params, 'from');
+    const modelTo = extractModelFromParams(params, 'to');
     const event = {
       at: Date.now(),
       method: String(method ?? ''),
       turnId: turnId ? String(turnId) : null,
       status: params.status?.type ?? params.status ?? thread?.status?.type ?? null,
       message: eventMessage(method, params),
+      modelFrom: modelFrom || null,
+      modelTo: modelTo || null,
+      model: modelTo || modelFrom || null,
     };
     const key = String(threadId);
     const current = this.eventsByThread.get(key) ?? [];
@@ -396,6 +440,143 @@ const terminalRolloutEvents = new Set([
   'completed',
   'error',
 ]);
+
+function shouldUseRolloutModelHints(thread, turns = []) {
+  const threadModel = extractModelFromPayload(
+    thread?.model
+      || thread?.currentModel
+      || thread?.config?.model
+      || thread?.settings?.model
+      || thread?.metadata?.model
+      || thread?.provider?.model,
+  );
+  if (!threadModel) return true;
+  for (const turn of turns ?? []) {
+    if (!extractModelFromPayload(turn)) return true;
+  }
+  return false;
+}
+
+function resolveRolloutPath(filePath, threadId, codexHome) {
+  if (!filePath && !threadId) return null;
+
+  if (filePath) {
+    if (existsSync(filePath)) return filePath;
+    try {
+      const resolvedPath = path.resolve(filePath);
+      if (existsSync(resolvedPath)) return resolvedPath;
+    } catch {
+      // fallback below
+    }
+  }
+
+  if (!threadId || !codexHome) return null;
+  const candidate = path.join(codexHome, 'sessions', `${threadId}.jsonl`);
+  return existsSync(candidate) ? candidate : null;
+}
+
+async function getRolloutModelInfo(filePath, threadId, codexHome) {
+  const candidatePath = resolveRolloutPath(filePath, threadId, codexHome);
+  if (!candidatePath) return null;
+
+  let resolvedPath = candidatePath;
+  try {
+    resolvedPath = path.resolve(candidatePath);
+  } catch {
+    resolvedPath = candidatePath;
+  }
+  try {
+    const handle = await open(resolvedPath, 'r');
+    let fileStat;
+    try {
+      fileStat = await handle.stat();
+    } finally {
+      await handle.close();
+    }
+    const cached = rolloutModelInfoCache.get(resolvedPath);
+    if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) return cached;
+    const info = await readRolloutModelInfo(resolvedPath);
+    const merged = {
+      ...info,
+      mtimeMs: fileStat.mtimeMs,
+      size: fileStat.size,
+    };
+    rolloutModelInfoCache.set(resolvedPath, merged);
+    return merged;
+  } catch {
+    return null;
+  }
+}
+
+function getRolloutTurnId(event) {
+  const payload = event?.payload ?? {};
+  return String(payload.turn_id ?? payload.turnId ?? payload.turn?.id ?? '').trim();
+}
+
+async function readRolloutModelInfo(filePath) {
+  const turnModels = new Map();
+  let threadModel = '';
+  const seenTurnModels = new Map();
+
+  try {
+    const input = createReadStream(filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+
+    for await (const line of lines) {
+      const text = String(line ?? '').trim();
+      if (!text) continue;
+
+      let event;
+      try {
+        event = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      const model = extractModelFromPayload(event.payload ?? event);
+      if (model) {
+        if (event?.type === 'session_meta' || !threadModel) threadModel = model;
+
+        const turnId = getRolloutTurnId(event);
+        if (turnId) seenTurnModels.set(turnId, model);
+      }
+    }
+  } catch {
+    return { threadModel: '', turnModels: new Map() };
+  }
+
+  for (const [turnId, model] of seenTurnModels.entries()) {
+    if (model) turnModels.set(turnId, model);
+  }
+
+  return {
+    threadModel,
+    turnModels,
+  };
+}
+
+const rolloutModelInfoCache = new Map();
+
+function applyRolloutModelHints(turns, rolloutInfo) {
+  if (!rolloutInfo || !turns?.length) return turns;
+  const turnModels = rolloutInfo.turnModels ?? new Map();
+
+  return turns.map((turn) => {
+    if (!turn?.id) return turn;
+    if (extractModelFromPayload(turn)) return turn;
+    const fromRollout = extractModelFromPayload(turnModels.get(String(turn.id)));
+    return fromRollout ? { ...turn, model: fromRollout } : turn;
+  });
+}
+
+function applyRolloutModelHintsToThread(thread, rolloutInfo, turns = []) {
+  if (!thread || !rolloutInfo) return thread;
+  const currentThreadModel = extractModelFromPayload(thread.model);
+  if (currentThreadModel) return thread;
+  const fromTurns = [...turns].map((turn) => extractModelFromPayload(turn)).filter(Boolean).pop() || '';
+  const fromRollout = extractModelFromPayload(rolloutInfo.threadModel) || fromTurns;
+  return fromRollout ? { ...thread, model: fromRollout } : thread;
+}
 
 async function inferExternalThreadStatus(thread) {
   const currentType = String(thread?.status?.type ?? '').toLowerCase();
@@ -541,6 +722,7 @@ function compactTurn(turn, steeredMessages = []) {
     startedAt: turn.startedAt,
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
+    model: extractModelFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
     items: (turn.items ?? []).map(compactItem),
   };
@@ -559,10 +741,17 @@ function shouldStoreEvent(method) {
 
 function eventMessage(method, params = {}) {
   const lower = String(method ?? '').toLowerCase();
+  const modelFrom = extractModelFromParams(params, 'from');
+  const modelTo = extractModelFromParams(params, 'to');
   const status = params.status?.type ?? params.thread?.status?.type ?? params.status;
-  const name = String(params.name ?? '').trim();
-  if (lower.includes('thread/name/set')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name cleared';
-  if (lower.includes('thread/name')) return 'Name updated';
+  const name = String(params.name ?? params.thread?.name ?? params.thread?.title ?? '').trim();
+  if (lower.includes('model')) {
+    if (modelFrom && modelTo && modelFrom !== modelTo) return `Model changed: ${modelFrom} -> ${modelTo}`;
+    if (modelTo) return `Model set to "${modelTo}"`;
+    if (modelFrom) return `Model set to "${modelFrom}"`;
+  }
+  if (lower.includes('thread/name/set') || lower.includes('thread/name/updated')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name updated';
+  if (lower.includes('thread/name')) return name ? `Renamed to "${truncate(name, 120)}"` : 'Name updated';
   if (lower.includes('thread/archive')) return 'Archived session';
   if (lower.includes('thread/unarchive')) return 'Restored session';
   if (lower.includes('thread/start')) return 'Opened session';
@@ -574,6 +763,91 @@ function eventMessage(method, params = {}) {
   if (lower.includes('turn/error') || lower.includes('failed')) return 'Turn error';
   if (status) return `Status: ${String(status)}`;
   return String(method ?? 'Event');
+}
+
+function inferThreadModel(thread, turns = []) {
+  const direct = extractModelFromPayload(thread?.model)
+    || extractModelFromPayload(thread?.config?.model)
+    || extractModelFromPayload(thread?.settings?.model)
+    || extractModelFromPayload(thread?.metadata?.model)
+    || extractModelFromPayload(thread?.provider?.model);
+  if (direct) return direct;
+
+  const turnModels = (turns ?? [])
+    .map((turn) => extractModelFromPayload(turn))
+    .filter(Boolean);
+  return turnModels.length ? turnModels[turnModels.length - 1] : '';
+}
+
+function extractModelFromPayload(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return normalizeModelValue(value);
+  if (typeof value === 'number' || typeof value === 'bigint') return normalizeModelValue(String(value));
+  if (typeof value !== 'object') return '';
+
+  const candidates = [
+    value.model,
+    value.name,
+    value.id,
+    value.value,
+    value.modelProvider,
+    value.providerModel,
+    value.modelName,
+    value.modelName?.name,
+    value.currentModel,
+    value.currentModel?.name,
+    value.model_provider,
+    value.model_name,
+    value.current_model,
+    value.provider_model,
+    value.model_id,
+    value.config?.model,
+    value.settings?.model,
+    value.metadata?.model,
+    value.provider?.model,
+    value.model?.name,
+    value.model?.id,
+    value.model?.value,
+  ];
+
+  for (const candidate of candidates) {
+    const model = extractModelFromPayload(candidate);
+    if (model) return model;
+  }
+
+  return '';
+}
+
+function extractModelFromParams(params = {}, direction) {
+  if (!params || typeof params !== 'object') return '';
+  const requested = String(direction ?? '').toLowerCase();
+  if (requested === 'from') {
+    return extractModelFromPayload(
+      params.fromModel ??
+      params.previousModel ??
+      params.prevModel ??
+      params.model?.from ??
+      params.model?.previous ??
+      params.model?.old
+    );
+  }
+  if (requested === 'to') {
+    return extractModelFromPayload(
+      params.toModel ??
+      params.nextModel ??
+      params.currentModel ??
+      params.model?.to ??
+      params.model?.next ??
+      params.model?.current
+    );
+  }
+  return extractModelFromPayload(params.model ?? params.modelName ?? params.modelId ?? params.providerModel ?? params.model?.name ?? params.model?.id);
+}
+
+function normalizeModelValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return text;
 }
 
 function textFromContent(content) {
@@ -672,6 +946,23 @@ function filterThreads(threads, params) {
   });
 
   return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, limit);
+}
+
+function listThreadOptionsFromParams(params) {
+  const q = (params.get('q') ?? params.get('query') ?? '').trim();
+  const repo = (params.get('repo') ?? '').trim();
+  const branch = (params.get('branch') ?? '').trim();
+  const source = (params.get('source') ?? '').trim();
+  const cwd = (params.get('cwd') ?? '').trim();
+  const includeArchived = params.get('archived') === '1' || params.get('archived') === 'true';
+  const needsLocalFilterWindow = Boolean(repo || branch);
+  return {
+    includeArchived,
+    limit: needsLocalFilterWindow ? 500 : params.get('limit'),
+    searchTerm: q,
+    cwd,
+    sourceKinds: source ? [source] : defaultSourceKinds,
+  };
 }
 
 function buildFacets(threads) {
@@ -969,8 +1260,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const includeArchived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true';
-      const threads = await codex.listThreads({ includeArchived, limit: url.searchParams.get('limit') });
+      const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
       sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
       return;
     }
