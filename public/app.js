@@ -2226,17 +2226,16 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 }
 
 function connectEvents() {
-  const refreshForThread = (threadId, { refreshDetailOnUnknown = false } = {}) => {
+  const refreshForThread = (threadId) => {
     scheduleLoadSessions();
     if (threadId === activeId) scheduleDetailRefresh(activeId, 150);
-    else if (!threadId && refreshDetailOnUnknown) scheduleDetailRefresh(activeId, 500);
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const params = payload.params ?? {};
     const threadId = params.threadId ?? params.thread?.id;
-    refreshForThread(threadId, { refreshDetailOnUnknown: true });
+    refreshForThread(threadId);
   });
   events.addEventListener('threads-changed', (event) => {
     const payload = JSON.parse(event.data || '{}');
