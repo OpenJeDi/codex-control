@@ -11,8 +11,11 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
 - Repository setup flow: actually clone a repo into the expected local worktree structure, then create/select the first lane worktree. Current Add repository only adds a repo URL/owner-name to the browser-local picker and assumes the local repo/worktrees already exist.
+- Configurable session workflow templates: repo/worktree-first remains the default local workflow, but the New Session dialog should eventually load workflow rules from config instead of hardcoding repo/worktree placement and branch naming.
 - Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
 - Richer live streaming / follow view.
+- Improve the development restart endpoint behavior: `/api/codex/restart` should respond quickly, restart asynchronously, and expose clear progress/health state so callers do not appear to hang.
+- Continue modularizing large orchestration files when changes justify it: split `src/server.mjs` into focused runtime/session/API modules and split `public/app.js` into session-list/detail/composer orchestration modules, while keeping transcript parsing/rendering isolated in the current transcript folders.
 
 ## Live observability / status chrome
 
@@ -31,7 +34,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 
 ## Prompt queue, steering, interruption, and approval UX
 
-Status: core behavior implemented in the session-interaction branch; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
+Status: core behavior is implemented; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
 
 - Implemented: when a turn is active, normal Send queues the message for after the agent finishes and shows the queued message above the prompt bar.
 - Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
@@ -55,7 +58,7 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 - Add subtle rollback buttons between turns/sections so the user can roll the conversation back to that point.
 - Before rollback, show a warning and current worktree dirty state/diff summary when possible.
 - Longer term, pair session rollback with optional git/file rollback helpers so model-made changes can be reverted deliberately.
-- Do not prioritize forking; it does not fit the intended JeDi/Brain workflow unless a clear use case appears later.
+- Do not prioritize forking unless a clear use case appears later.
 
 ## Explicitly out of current scope
 
@@ -72,7 +75,8 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 
 ## Transcript rendering polish
 
-- Improve the basic safe Markdown renderer: richer tables/blockquotes/task lists if they become useful, without making command/raw payload rendering noisy.
+- Improve the basic safe Markdown renderer: blockquotes/task lists and richer table handling if they become useful, without making command/raw payload rendering noisy.
+- Follow-up: table rendering currently supports basic pipe tables only; add escaped pipe handling, alignment, and better overflow styling if tables become common.
 - Improve existing session image rendering polish later: captions, sizing, and multiple-image layout. Basic Codex structured image parts, Markdown local image/video links, and absolute local file links now render/link through media endpoints.
 - Keep commands, file changes, raw JSON, and large/noisy payloads collapsible in monospace.
 - Preserve inspectability while making normal Codex replies pleasant to read.

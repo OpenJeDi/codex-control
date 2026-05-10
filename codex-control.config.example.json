@@ -1,0 +1,16 @@
+{
+  "workspaceRoots": [
+    "C:/Users/you/work"
+  ],
+  "defaultWorktreeWorkflow": "bare-container",
+  "worktreeWorkflows": {
+    "bare-container": {
+      "label": "Bare repo container with worktrees",
+      "branchWorktree": "{workspaceRoot}/{repoName}/worktrees/{branchName}"
+    },
+    "auto-sibling": {
+      "label": "Auto sibling worktrees",
+      "branchWorktree": "{autoWorktreeRoot}/{branchName}"
+    }
+  }
+}

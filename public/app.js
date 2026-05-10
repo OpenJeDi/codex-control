@@ -1,3 +1,15 @@
+import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
+import {
+  bindCodeCopyControls,
+  bindSessionImageViewer,
+  createTranscriptRenderContext,
+  escapeAttribute,
+  escapeHtml,
+  renderCompactDetailsItem,
+  renderContentParts,
+  renderMarkdownText,
+} from './transcript/rendering.js';
+
 const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
@@ -29,6 +41,7 @@ const repoUrlInput = document.querySelector('#repoUrlInput');
 const repoDisplayPreview = document.querySelector('#repoDisplayPreview');
 const repoValuePreview = document.querySelector('#repoValuePreview');
 const repoError = document.querySelector('#repoError');
+const newSessionNameInput = document.querySelector('#newSessionNameInput');
 const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
 const newWorktreeHint = document.querySelector('#newWorktreeHint');
 const createWorktreeButton = document.querySelector('#createWorktreeButton');
@@ -70,9 +83,22 @@ const PERMISSION_PRESETS = [
   { id: 'trusted', label: 'trusted local', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'untrusted', networkAccess: false },
   { id: 'full', label: 'full autonomous', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'never', networkAccess: false },
 ];
-let appSettings = { config: {}, models: [] };
+let appSettings = { config: {}, models: [], readOnly: false, fileServingMode: 'session' };
 
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const transcriptRenderContext = createTranscriptRenderContext();
+let transcriptBlockRenderer;
+let transcriptItemRenderer;
+function getTranscriptBlockRenderer() {
+  if (transcriptBlockRenderer) return transcriptBlockRenderer;
+  transcriptBlockRenderer = createTranscriptBlockRenderer(transcriptRenderContext);
+  return transcriptBlockRenderer;
+}
+function getTranscriptItemRenderer() {
+  if (transcriptItemRenderer) return transcriptItemRenderer;
+  transcriptItemRenderer = createTranscriptItemRenderer(transcriptRenderContext);
+  return transcriptItemRenderer;
+}
+
 const truncate = (value, max = 12000) => {
   const text = String(value ?? '');
   return text.length > max ? `${text.slice(0, max)}\n... truncated ...` : text;
@@ -80,7 +106,10 @@ const truncate = (value, max = 12000) => {
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
-const compactPath = (value) => String(value ?? '');
+const compactPath = (value) => String(value ?? '')
+  .replace(/^[A-Z]:\\Users\\[^\\]+\\/i, '~\\')
+  .replace(/^\/home\/[^/]+\//i, '~/')
+  .replace(/^\/Users\/[^/]+\//i, '~/');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
 const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);
@@ -814,6 +843,17 @@ function updateSettingSource(dot, explicit) {
   dot.title = explicit ? 'Explicit override' : 'Using config value';
 }
 
+function isReadOnly() {
+  return Boolean(appSettings.readOnly);
+}
+
+function applyAccessMode() {
+  document.body.classList.toggle('read-only-mode', isReadOnly());
+  if (newSessionButton) newSessionButton.hidden = isReadOnly();
+  if (addRepoButton) addRepoButton.hidden = isReadOnly();
+  if (createWorktreeButton) createWorktreeButton.hidden = isReadOnly();
+}
+
 function normalizeRepoInput(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -822,6 +862,7 @@ function normalizeRepoInput(value) {
 }
 
 function openAddRepoDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   addRepoForm.reset();
   repoError.textContent = '';
   repoDisplayPreview.textContent = '-';
@@ -855,6 +896,7 @@ function updateRepoPreview() {
 
 async function addRepository(event) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const repo = normalizeRepoInput(repoUrlInput.value);
   if (!repo) return;
   saveCustomRepos([...customRepos(), repo]);
@@ -909,10 +951,13 @@ async function loadSettings() {
     appSettings = {
       config: settings.config ?? {},
       models: Array.isArray(settings.models) ? settings.models : [],
+      readOnly: Boolean(settings.readOnly),
+      fileServingMode: settings.fileServingMode || 'session',
     };
   } catch {
-    appSettings = { config: {}, models: [] };
+    appSettings = { config: {}, models: [], readOnly: false, fileServingMode: 'session' };
   }
+  applyAccessMode();
 }
 
 async function loadHealth() {
@@ -958,6 +1003,8 @@ function renderRuntimeDiagnostics(data) {
         ['Git metadata', git.gitCommonDir || '-'],
       ])}
       ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
+        ['Access mode', server.readOnly ? 'read only' : 'read/write'],
+        ['File serving', server.fileServingMode === 'system' ? 'system files' : 'session policy'],
         ['App root', server.rootDir || '-'],
         ['Server platform', server.platform || '-'],
         ['Config file', server.configPath || '-'],
@@ -1044,6 +1091,7 @@ async function loadSessions({ quiet = false } = {}) {
 
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = event.currentTarget;
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
@@ -1051,10 +1099,14 @@ async function startSessionFromSelectedWorktree(event) {
   saveModelDefaults(modelPref);
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
-  if (!cwd) return window.alert('Choose a worktree first.');
-  const selected = newSessionWorktrees.find((item) => item.path === cwd);
-  if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
-  formData.set('cwd', cwd);
+  const sessionName = newSessionNameInput.value.trim();
+  if (cwd === '__chat__') formData.delete('cwd');
+  else {
+    if (!cwd) return window.alert('Choose a worktree first, or choose chat-only.');
+    const selected = newSessionWorktrees.find((item) => item.path === cwd);
+    if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
+    formData.set('cwd', cwd);
+  }
 
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
@@ -1067,6 +1119,7 @@ async function startSessionFromSelectedWorktree(event) {
     });
     if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
     if (data.thread?.id) saveThreadModel(data.thread.id, modelPref);
+    if (data.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(data.thread.id)}/name`, { name: sessionName });
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
@@ -1083,10 +1136,12 @@ let currentWorktreePlan = null;
 let planTimer = null;
 
 function openCreateWorktreeDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const sourcePath = selectedWorktreeSourcePath();
   if (!sourcePath) return window.alert('Choose a source worktree first.');
   currentWorktreePlan = null;
   createWorktreeForm.reset();
+  worktreeNameInput.value = newSessionNameInput.value.trim();
   planSource.textContent = compactPath(sourcePath);
   planBranch.textContent = '-';
   planWorktree.textContent = '-';
@@ -1094,6 +1149,7 @@ function openCreateWorktreeDialog() {
   planError.textContent = '';
   confirmCreateWorktree.disabled = true;
   createWorktreeDialog.showModal();
+  if (worktreeNameInput.value.trim()) updateWorktreePlan();
   worktreeNameInput.focus();
 }
 
@@ -1103,6 +1159,7 @@ function scheduleWorktreePlan() {
 }
 
 async function updateWorktreePlan() {
+  if (isReadOnly()) return;
   const sourcePath = selectedWorktreeSourcePath();
   const branch = worktreeNameInput.value.trim();
   const targetRoot = worktreeRootInput.value.trim();
@@ -1133,11 +1190,13 @@ async function updateWorktreePlan() {
 
 async function createFeatureWorktree(event) {
   event?.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   if (!currentWorktreePlan) await updateWorktreePlan();
   if (!currentWorktreePlan) return;
   confirmCreateWorktree.disabled = true;
   confirmCreateWorktree.textContent = 'Creating...';
   try {
+    const sessionName = currentWorktreePlan.branch || worktreeNameInput.value.trim();
     const created = await jsonApi('/api/worktrees', {
       sourcePath: currentWorktreePlan.sourcePath,
       branch: currentWorktreePlan.branch,
@@ -1156,6 +1215,7 @@ async function createFeatureWorktree(event) {
     const started = await jsonApi('/api/threads', { cwd: createdPath, ...permissionPayload(pref), ...modelPayload(modelPref) });
     if (started.thread?.id) saveThreadPermission(started.thread.id, pref);
     if (started.thread?.id) saveThreadModel(started.thread.id, modelPref);
+    if (started.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(started.thread.id)}/name`, { name: sessionName });
     if (started.thread?.id) await loadDetail(started.thread.id);
     await loadSessions();
   } catch (error) {
@@ -1183,7 +1243,7 @@ function updateRepoOptions(repos) {
     options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (saved)</option>`);
   }
 
-  options.push('<option value="__add_repo__">+ Add repo...</option>');
+  if (!isReadOnly()) options.push('<option value="__add_repo__">+ Add repo...</option>');
   repoFilter.innerHTML = options.join('');
   if (previous && [...repoFilter.options].some((option) => option.value === previous)) repoFilter.value = previous;
   syncNewSessionRepoOptions();
@@ -1199,6 +1259,7 @@ function syncNewSessionRepoOptions() {
 }
 
 async function openNewSessionDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   syncNewSessionRepoOptions();
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
   applyPermissionPreference(newSessionForm, permissionDefaults());
@@ -1214,7 +1275,8 @@ async function loadNewSessionWorktrees(preferredPath = '') {
   newWorktreeSelect.innerHTML = '';
   newWorktreeHint.textContent = '';
   createWorktreeButton.disabled = true;
-  createWorktreeButton.title = 'Choose a source worktree first.';
+  createWorktreeButton.hidden = isReadOnly();
+  createWorktreeButton.title = isReadOnly() ? 'Read-only mode is enabled.' : 'Choose a source worktree first.';
   if (startButton) startButton.disabled = true;
   if (!repo) {
     newWorktreeHint.textContent = 'Choose a repo first.';
@@ -1232,18 +1294,25 @@ async function loadNewSessionWorktrees(preferredPath = '') {
       return;
     }
 
+    const chatOption = '<option value="__chat__">No worktree - chat only</option>';
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
       const attached = Boolean(item.session);
       const sessionName = item.session?.name || item.session?.id || 'session';
-      const suffix = attached ? ` — has session: ${sessionName}` : '';
-      return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
-    }).join('');
+      const suffix = attached ? ` - has session: ${sessionName}` : '';
+      return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} - ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
+    }).join('') + chatOption;
     const available = worktrees.filter((item) => !item.session);
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath && !option.disabled)) newWorktreeSelect.value = preferredPath;
-    else if (available[0]) newWorktreeSelect.value = available[0].path;
-    createWorktreeButton.disabled = false;
-    createWorktreeButton.title = 'Create a new worktree from this repo.';
+    else {
+      const suggested = suggestedWorktreeForSessionName();
+      if (suggested) newWorktreeSelect.value = suggested.path;
+      else if (available[0]) newWorktreeSelect.value = available[0].path;
+      else newWorktreeSelect.value = '__chat__';
+    }
+    createWorktreeButton.disabled = isReadOnly();
+    createWorktreeButton.hidden = isReadOnly();
+    createWorktreeButton.title = isReadOnly() ? 'Read-only mode is enabled.' : 'Create a new worktree from this repo.';
     updateNewSessionStartState();
     newWorktreeHint.textContent = available.length
       ? `${available.length} of ${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} can start a new session. Attached worktrees are disabled.`
@@ -1255,16 +1324,46 @@ async function loadNewSessionWorktrees(preferredPath = '') {
 }
 
 function selectedWorktreeSourcePath() {
-  return newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '';
+  return newWorktreeSelect.value === '__chat__' ? (newSessionWorktrees.find((item) => item.path)?.path || '') : (newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '');
 }
 
 function updateNewSessionStartState() {
   const startButton = newSessionForm.querySelector('button[type="submit"]');
   if (!startButton) return;
+  if (newWorktreeSelect.value === '__chat__') {
+    startButton.disabled = false;
+    startButton.title = '';
+    newWorktreeHint.textContent = 'This will start a chat-only Codex session without a repository worktree.';
+    return;
+  }
   const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value);
   const canStart = Boolean(selected && !selected.session);
   startButton.disabled = !canStart;
   startButton.title = canStart ? '' : 'Choose a worktree without an existing session, or create a new worktree.';
+}
+
+function slugFromSessionName(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function suggestedWorktreeForSessionName() {
+  const slug = slugFromSessionName(newSessionNameInput.value);
+  if (!slug) return null;
+  return newSessionWorktrees.find((item) => !item.session && (
+    String(item.branch ?? '').toLowerCase().includes(slug) ||
+    compactPath(item.path).toLowerCase().includes(slug)
+  )) ?? null;
+}
+
+function applySessionNameWorktreeSuggestion() {
+  const suggested = suggestedWorktreeForSessionName();
+  if (suggested) {
+    newWorktreeSelect.value = suggested.path;
+    newWorktreeHint.textContent = `Selected matching worktree: ${compactPath(suggested.path)}`;
+  } else if (newSessionNameInput.value.trim()) {
+    createWorktreeButton.title = 'No matching free worktree found. Create one from this session name.';
+  }
+  updateNewSessionStartState();
 }
 
 function renderBranchGroups(sessions) {
@@ -1375,8 +1474,8 @@ async function loadDetail(id, { quiet = false } = {}) {
     bindQueuedMessageControls(id);
     restoreOpenTurnDetails(openTurnDetails);
     restoreSessionDetailsOpen(sessionDetailsOpen);
-    bindCodeCopyControls();
-    bindSessionImageViewer();
+    bindCodeCopyControls(detailEl);
+    bindSessionImageViewer(detailEl, openImageLightbox);
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -1391,6 +1490,7 @@ async function loadDetail(id, { quiet = false } = {}) {
 }
 
 function patchDetailPreservingComposer(renderedHtml, thread) {
+  if (isReadOnly()) return false;
   const currentShell = detailEl.querySelector('.detail-shell');
   const currentForm = currentShell?.querySelector('#promptForm');
   if (!currentShell || !currentForm) return false;
@@ -1399,6 +1499,7 @@ function patchDetailPreservingComposer(renderedHtml, thread) {
   container.innerHTML = renderedHtml;
   const nextShell = container.querySelector('.detail-shell');
   if (!nextShell) return false;
+  if (!nextShell.querySelector('#promptForm')) return false;
 
   for (const selector of ['.session-header', '.detail', '.jump-bottom']) {
     const current = currentShell.querySelector(selector);
@@ -1425,6 +1526,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   const archiveLabel = isArchived ? 'Unarchive' : 'Archive';
+  const writable = !isReadOnly();
   return `<div class="detail-shell">
     <div class="session-header">
       <details class="session-meta">
@@ -1450,10 +1552,10 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
           ${renderEventTimeline(timelineEvents)}
         </div>
       </details>
-      <div class="detail-actions">
+      ${writable ? `<div class="detail-actions">
         <button type="button" data-action="rename-thread">Rename</button>
         <button type="button" data-action="archive-thread">${archiveLabel}</button>
-      </div>
+      </div>` : ''}
     </div>
     <div class="detail">
       ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
@@ -1462,7 +1564,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
     ${renderQueuedMessages(queuedMessages)}
-    <form class="prompt-bar" id="promptForm">
+    ${writable ? `<form class="prompt-bar" id="promptForm">
       <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
       <div class="prompt-actions">
         <label class="attach-button" title="Attach files">
@@ -1477,7 +1579,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
       <div class="attachment-preview" aria-live="polite"></div>
-    </form>
+    </form>` : ''}
   </div>`;
 }
 
@@ -1583,17 +1685,18 @@ function renderBusyIndicator(thread) {
 
 function renderQueuedMessages(messages = []) {
   if (!messages.length) return '';
+  const controls = !isReadOnly();
   return `<div class="queued-messages" aria-live="polite">
     <div class="queued-title">Queued messages</div>
     ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeHtml(message.turnId || '')}">
       <div class="queued-head">
         <span></span>
-        <div class="queued-actions">
+        ${controls ? `<div class="queued-actions">
           <button type="button" data-queue-action="up" ${index === 0 ? 'disabled' : ''}>Up</button>
           <button type="button" data-queue-action="down" ${index === messages.length - 1 ? 'disabled' : ''}>Down</button>
           <button type="button" data-queue-action="steer">Steer now</button>
           <button type="button" data-queue-action="remove">Remove</button>
-        </div>
+        </div>` : ''}
       </div>
       ${renderQueuedAttachments(message.attachments)}
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
@@ -1618,6 +1721,7 @@ function bindQueuedMessageControls(threadId) {
 }
 
 async function updateQueuedMessage(threadId, queuedId, action, button) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   if (!threadId || !queuedId || !action) return;
   button.disabled = true;
   const label = button.textContent;
@@ -1635,6 +1739,7 @@ async function updateQueuedMessage(threadId, queuedId, action, button) {
 }
 
 async function renameThread(id, thread) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const current = thread?.name || '';
   const name = window.prompt('Session name:', current);
   if (name === null) return;
@@ -1644,6 +1749,7 @@ async function renameThread(id, thread) {
 }
 
 async function toggleArchiveThread(id, thread = {}) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   if (isArchived) {
     await jsonApi(`/api/threads/${encodeURIComponent(id)}/unarchive`, {});
@@ -1662,6 +1768,7 @@ async function toggleArchiveThread(id, thread = {}) {
 }
 
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = detailEl.querySelector('#promptForm');
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
@@ -1696,6 +1803,7 @@ async function steerTurn(id, button = detailEl.querySelector('[data-action=steer
 }
 
 async function interruptTurn(id) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const button = detailEl.querySelector('[data-action=interrupt-turn]');
   if (button) {
     button.disabled = true;
@@ -1716,6 +1824,7 @@ async function interruptTurn(id) {
 
 async function submitPrompt(event, id) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
   const pref = preferenceFromControls(form);
@@ -1831,6 +1940,7 @@ function removeAttachmentAt(input, removeIndex) {
 }
 
 function syncPromptComposerState(form, thread) {
+  if (isReadOnly()) return;
   if (!form) return;
   const busy = isBusyThread(thread);
   const submit = form.querySelector('button[type="submit"]');
@@ -1959,6 +2069,13 @@ function itemLabel(item) {
   if (item.type === 'agentMessage') return item.phase === 'commentary' ? 'Agent note' : 'Agent response';
   if (item.type === 'commandExecution') return 'Command';
   if (item.type === 'reasoning') return 'Reasoning summary';
+  if (String(item.type).toLowerCase() === 'imagegeneration') return 'Image generation';
+  if (
+    Array.isArray(item?.renderBlocks)
+    && item.renderBlocks.some((block) => String(block?.kind || block?.type || '').toLowerCase() === 'imagegeneration')
+  ) {
+    return 'Image generation';
+  }
   if (String(item.type).toLowerCase().includes('file')) return 'File change';
   return String(item.type ?? 'Item').replace(/([a-z])([A-Z])/g, '$1 $2');
 }
@@ -1974,156 +2091,6 @@ function looksNoisy(item, body) {
 
 function hasRenderableMedia(item) {
   return Array.isArray(item.parts) && item.parts.some((part) => part.type === 'image');
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value).replace(/`/g, '&#96;');
-}
-
-function mediaKindFromSrc(src) {
-  const raw = String(src ?? '').toLowerCase();
-  if (raw.includes('kind=video')) return 'video';
-  if (raw.includes('kind=image')) return 'image';
-  const clean = raw.split('?')[0];
-  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(clean) || clean.startsWith('/api/media/')) return 'image';
-  if (/\.(mp4|webm|mov|m4v)$/.test(clean)) return 'video';
-  return 'file';
-}
-
-function renderMarkdownMedia(src, label = '', embedded = false) {
-  const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
-  const caption = escapeHtml(label || 'media');
-  const kind = mediaKindFromSrc(cleanSrc);
-  if (embedded && kind === 'image') {
-    return `<figure class="session-image"><img src="${escapeAttribute(cleanSrc)}" alt="${escapeAttribute(label || 'Session image')}" loading="lazy"><figcaption>${caption}</figcaption></figure>`;
-  }
-  if (embedded && kind === 'video') {
-    return `<figure class="session-image session-video"><video src="${escapeAttribute(cleanSrc)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
-  }
-  return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
-}
-
-function renderInlineMarkdown(text) {
-  const codeSpans = [];
-  const media = [];
-  let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
-    const token = `@@CODE${codeSpans.length}@@`;
-    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
-    return token;
-  }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
-    const token = `@@MEDIA${media.length}@@`;
-    media.push(renderMarkdownMedia(src, alt, true));
-    return token;
-  });
-  html = escapeHtml(html);
-  for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
-  html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
-  return html;
-}
-
-function renderMarkdownBlocks(text) {
-  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
-  const blocks = [];
-  let paragraph = [];
-  let list = null;
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${list.type}>`);
-    list = null;
-  };
-
-  for (const line of lines) {
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length + 2;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
-      continue;
-    }
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
-    if (bullet) {
-      flushParagraph();
-      if (!list || list.type !== 'ul') list = { type: 'ul', items: [] };
-      list.items.push(bullet[1]);
-      continue;
-    }
-    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (numbered) {
-      flushParagraph();
-      if (!list || list.type !== 'ol') list = { type: 'ol', items: [] };
-      list.items.push(numbered[1]);
-      continue;
-    }
-    paragraph.push(line.trim());
-  }
-  flushParagraph();
-  flushList();
-  return blocks.join('') || '<p></p>';
-}
-
-function renderCodeBlockContent(code) {
-  const source = String(code ?? '');
-  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\[^\\/\s`<>()\[\]{}]+[\\/]|\/(?!\/))[^\s`<>()\[\]{}]+)/g;
-  let html = '';
-  let lastIndex = 0;
-  for (const match of source.matchAll(pathPattern)) {
-    const rawMatch = match[1];
-    const start = match.index ?? 0;
-    const rawPath = rawMatch.replace(/[.,;:]+$/g, '');
-    const suffix = rawMatch.slice(rawPath.length);
-    html += escapeHtml(source.slice(lastIndex, start));
-    html += `<a class="code-file-link" href="/api/media/path?path=${encodeURIComponent(rawPath)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`;
-    lastIndex = start + rawMatch.length;
-  }
-  html += escapeHtml(source.slice(lastIndex));
-  return html;
-}
-
-function renderMarkdownText(text) {
-  const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
-  return `<div class="markdown-body">${segments.map((segment, index) => {
-    if (index % 2 === 1) {
-      const code = segment.replace(/^\w+\n/, '');
-      return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${renderCodeBlockContent(code)}</code></pre>`;
-    }
-    return renderMarkdownBlocks(segment);
-  }).join('')}</div>`;
-}
-
-function bindCodeCopyControls() {
-  detailEl.querySelectorAll('.copy-code').forEach((button) => {
-    button.onclick = async () => {
-      const code = button.parentElement?.querySelector('code')?.textContent ?? '';
-      try {
-        await navigator.clipboard.writeText(code);
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
-      } catch {
-        window.alert('Could not copy code.');
-      }
-    };
-  });
-}
-
-function bindSessionImageViewer() {
-  detailEl.querySelectorAll('.session-image img, .queued-attachments img').forEach((image) => {
-    image.addEventListener('click', () => openImageLightbox(image.src, image.alt || 'Session image'));
-  });
 }
 
 function openImageLightbox(src, alt = '') {
@@ -2207,47 +2174,50 @@ function bindImageLightbox() {
   });
 }
 
-function shouldRenderMarkdown(item) {
-  return item.type === 'userMessage' || item.type === 'agentMessage' || item.type === 'reasoning';
-}
-
-function renderContentParts(item, fallbackBody) {
-  const renderText = (text) => shouldRenderMarkdown(item) ? renderMarkdownText(text) : `<pre>${escapeHtml(text)}</pre>`;
-  if (!Array.isArray(item.parts) || !item.parts.length) return renderText(fallbackBody);
-  return item.parts.map((part) => {
-    if (part.type === 'text') return part.text ? renderText(part.text) : '';
-    if (part.type === 'image') {
-      return `<figure class="session-image"><img src="${escapeHtml(part.src)}" alt="Attached session image" loading="lazy"><figcaption>${escapeHtml(part.contentType || 'image')}</figcaption></figure>`;
-    }
-    if (part.type === 'unsupportedImage') return '<div class="unsupported-media">Image omitted: unsupported source</div>';
-    return '';
-  }).join('');
-}
-
 function renderItem(item) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
+  const customItem = renderSingleItem(item);
+  const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
   const preview = noisy ? body.slice(0, 220).replace(/\s+/g, ' ').trim() : body;
 
-  if (noisy) {
-    return `<article class="item ${escapeHtml(item.type)} compact-item">
-      <details>
-        <summary>
-          <span>${escapeHtml(label)}</span>
-          <small>${escapeHtml(preview || 'expand details')}</small>
-        </summary>
-        <pre>${escapeHtml(body)}</pre>
-      </details>
+  if (customItem) return customItem;
+
+  if (customBlocks) {
+    return `<article class="item ${escapeHtml(item.type)}">
+      <div class="item-type">${escapeHtml(label)}</div>
+      ${customBlocks}
     </article>`;
+  }
+
+  if (noisy) {
+    return renderCompactDetailsItem({
+      type: item.type,
+      label,
+      body,
+      preview,
+    });
   }
 
   return `<article class="item ${escapeHtml(item.type)}">
     <div class="item-type">${escapeHtml(label)}</div>
     ${renderContentParts(item, body)}
   </article>`;
+}
+
+function renderItemBlocks(item) {
+  const blocks = Array.isArray(item?.renderBlocks) ? item.renderBlocks : [];
+  if (!blocks.length) return '';
+  const renderer = getTranscriptBlockRenderer();
+  return renderer(blocks);
+}
+
+function renderSingleItem(item) {
+  const parser = getTranscriptItemRenderer();
+  return parser([item]);
 }
 
 function scheduleLoadSessions() {
@@ -2262,17 +2232,16 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 }
 
 function connectEvents() {
-  const refreshForThread = (threadId, { refreshDetailOnUnknown = false } = {}) => {
+  const refreshForThread = (threadId) => {
     scheduleLoadSessions();
     if (threadId === activeId) scheduleDetailRefresh(activeId, 150);
-    else if (!threadId && refreshDetailOnUnknown) scheduleDetailRefresh(activeId, 500);
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const params = payload.params ?? {};
     const threadId = params.threadId ?? params.thread?.id;
-    refreshForThread(threadId, { refreshDetailOnUnknown: true });
+    refreshForThread(threadId);
   });
   events.addEventListener('threads-changed', (event) => {
     const payload = JSON.parse(event.data || '{}');
@@ -2319,6 +2288,10 @@ filters.addEventListener('submit', (event) => event.preventDefault());
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
 repoFilter.addEventListener('change', () => {
+  if (isReadOnly() && repoFilter.value === '__add_repo__') {
+    repoFilter.value = savedSelectedRepo();
+    return;
+  }
   if (repoFilter.value !== '__add_repo__') {
     saveSelectedRepo(repoFilter.value);
     return;
@@ -2350,6 +2323,7 @@ cancelAddRepo.addEventListener('click', () => addRepoDialog.close());
 runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
+newSessionNameInput.addEventListener('input', applySessionNameWorktreeSuggestion);
 newWorktreeSelect.addEventListener('change', updateNewSessionStartState);
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
 createWorktreeButton.addEventListener('click', openCreateWorktreeDialog);

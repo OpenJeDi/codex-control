@@ -2,6 +2,7 @@ import path from 'node:path';
 import { defaultWorktreeRoot, quoteWindowsCmdArg, stripPathQuotes } from './common.mjs';
 
 const fsPath = path.win32;
+const quotePowerShellSingle = (value) => `'${String(value ?? '').replace(/'/g, "''")}'`;
 
 export default {
   family: 'windows',
@@ -24,7 +25,7 @@ export default {
       ? `git -C ${quoteWindowsCmdArg(sourcePath)} worktree add ${quoteWindowsCmdArg(targetPath)} ${quoteWindowsCmdArg(branch)}`
       : `git -C ${quoteWindowsCmdArg(sourcePath)} worktree add -b ${quoteWindowsCmdArg(branch)} ${quoteWindowsCmdArg(targetPath)}`;
   },
-  restartCommand({ port }) {
-    return `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'node\\s+src\\\\server\\.mjs|node\\s+src/server\\.mjs' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask -TaskName 'codex-control'; Start-Sleep -Seconds 3; (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:${port}/api/health').StatusCode"`;
+  restartCommand({ port, restartTaskName = '' }) {
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-codex-control.ps1 -HealthUrl ${quotePowerShellSingle(`http://127.0.0.1:${port}/api/health`)}${restartTaskName ? ` -TaskName ${quotePowerShellSingle(restartTaskName)}` : ''}`;
   },
 };

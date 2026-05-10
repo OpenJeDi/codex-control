@@ -1,24 +1,42 @@
 import { execFile, spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { hostPlatform } from './platform/index.mjs';
+import { createTranscriptMediaHelpers } from './transcript/media.js';
+import { createTranscriptNormalizer, textFromContent, truncate } from './transcript/normalize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
+loadDotEnv(path.join(rootDir, '.env'));
 const publicDir = path.join(rootDir, 'public');
 const configPath = path.join(rootDir, 'codex-control.config.json');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
+const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
+const readOnlyMode = ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_READ_ONLY || '').trim().toLowerCase());
+const fileServingMode = normalizeFileServingMode(process.env.CODEX_CONTROL_FILE_SERVING || (process.env.CODEX_CONTROL_SERVE_SYSTEM_FILES ? 'system' : 'session'));
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
 const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
+const transcriptMedia = createTranscriptMediaHelpers({
+  mediaById,
+  canServeLocalFilePath,
+  localFileScope,
+  normalizeLocalFilePath,
+});
+const { mediaFromLocalFilePath } = transcriptMedia;
+const transcriptNormalizer = createTranscriptNormalizer({
+  ...transcriptMedia,
+  extractModelFromPayload,
+  extractEffortFromPayload,
+});
 
 class CodexAppServer {
   constructor() {
@@ -28,6 +46,7 @@ class CodexAppServer {
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
     this.permissionSettingsByThread = new Map();
+    this.cwdByThread = new Map();
     this.attachmentsByTurn = new Map();
     this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
@@ -366,21 +385,26 @@ class CodexAppServer {
     }
 
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
+    const permissionSettings = this.permissionSettingsByThread.get(key) ?? {};
+    const mediaPolicy = mediaPolicyForThread(resolvedThread, permissionSettings);
+    if (resolvedThread?.cwd) this.cwdByThread.set(key, resolvedThread.cwd);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
-      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
-      permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
+      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd, mediaPolicy)),
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map((message) => normalizeQueuedMessage(message, mediaPolicy)),
+      permissionSettings,
       events: this.eventsByThread.get(key) ?? [],
     };
   }
 
-  async startThread(cwd, overrides = {}) {
+  async startThread(cwd = '', overrides = {}) {
     await this.ready;
-    const result = await this.request('thread/start', { cwd }, 30000, { allowRetry: false });
+    const params = String(cwd ?? '').trim() ? { cwd: String(cwd).trim() } : {};
+    const result = await this.request('thread/start', params, 30000, { allowRetry: false });
     if (result.thread) {
       this.rememberStatus('thread/started', { thread: result.thread });
       this.rememberPermissionSettings(result.thread.id, overrides);
+      if (result.thread.cwd) this.cwdByThread.set(String(result.thread.id), result.thread.cwd);
     }
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
@@ -389,6 +413,7 @@ class CodexAppServer {
     await this.ready;
     const result = await this.request('thread/resume', { threadId }, 30000, { allowRetry: false });
     if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
+    if (result.thread?.cwd) this.cwdByThread.set(String(threadId), result.thread.cwd);
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
@@ -412,12 +437,20 @@ class CodexAppServer {
     this.rememberPermissionSettings(threadId, overrides);
     const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
-    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
+    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input, this.mediaPolicyForThreadId(threadId)));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
     return result;
+  }
+
+  mediaPolicyForThreadId(threadId) {
+    const key = String(threadId);
+    return mediaPolicyForThread(
+      { id: key, cwd: this.cwdByThread.get(key) || '' },
+      this.permissionSettingsByThread.get(key) ?? {},
+    );
   }
 
   async steerTurn(threadId, input) {
@@ -569,14 +602,15 @@ class CodexAppServer {
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
-    return removed ? compactQueuedMessage(removed) : null;
+    return removed ? normalizeQueuedMessage(removed, this.mediaPolicyForThreadId(threadId)) : null;
   }
 
   moveQueuedMessage(threadId, turnId, direction) {
     const key = String(threadId);
     const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
     const index = current.findIndex((message) => String(message.turnId) === String(turnId));
-    if (index === -1) return current.map(compactQueuedMessage);
+    const mediaPolicy = this.mediaPolicyForThreadId(threadId);
+    if (index === -1) return current.map((message) => normalizeQueuedMessage(message, mediaPolicy));
     const delta = direction === 'down' ? 1 : -1;
     const target = Math.max(0, Math.min(current.length - 1, index + delta));
     if (target !== index) {
@@ -584,7 +618,7 @@ class CodexAppServer {
       current.splice(target, 0, message);
       this.queuedMessagesByThread.set(key, current);
     }
-    return current.map(compactQueuedMessage);
+    return current.map((message) => normalizeQueuedMessage(message, mediaPolicy));
   }
 
   async steerQueuedMessage(threadId, turnId) {
@@ -714,6 +748,45 @@ function isTurnsNotReadyError(error) {
 function isActiveTurnStatus(status) {
   const text = String(status ?? '').toLowerCase();
   return text === 'inprogress' || text === 'in_progress' || text === 'running';
+}
+
+function loadDotEnv(filePath) {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  const text = readFileSync(filePath, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || process.env[key] !== undefined) {
+      continue;
+    }
+
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    const isQuoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+    if (isQuoted) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  }
+}
+
+function normalizeFileServingMode(value) {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return ['system', 'all', 'any'].includes(mode) ? 'system' : 'session';
 }
 
 const terminalRolloutEvents = new Set([
@@ -1170,48 +1243,20 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
-  return {
-    id: turn.id,
-    status: turn.status,
-    error: turn.error,
-    startedAt: turn.startedAt,
-    completedAt: turn.completedAt,
-    durationMs: turn.durationMs,
-    model: extractModelFromPayload(turn),
-    effort: extractEffortFromPayload(turn),
-    steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
-  };
-}
-
-function compactQueuedMessage(message) {
+function normalizeQueuedMessage(message, mediaPolicy = {}) {
   return {
     turnId: message.turnId,
     text: message.text,
-    attachments: attachmentsFromInput(message.input),
+    attachments: attachmentsFromInput(message.input, mediaPolicy),
     createdAt: message.createdAt,
   };
 }
 
-function mergeTurnAttachments(items, attachments = []) {
-  if (!attachments.length) return items;
-  const userIndex = items.findIndex((item) => item.type === 'userMessage');
-  if (userIndex === -1) return items;
-  const next = [...items];
-  const userItem = next[userIndex];
-  const existingParts = Array.isArray(userItem.parts) ? userItem.parts : [];
-  const existingSrcs = new Set(existingParts.map((part) => part.src).filter(Boolean));
-  const attachmentParts = attachments.filter((attachment) => !existingSrcs.has(attachment.src));
-  next[userIndex] = { ...userItem, parts: [...existingParts, ...attachmentParts] };
-  return next;
-}
-
-function attachmentsFromInput(input = []) {
+function attachmentsFromInput(input = [], mediaPolicy = {}) {
   return (Array.isArray(input) ? input : [])
     .filter((part) => part?.type === 'localImage' && part.path)
     .map((part) => {
-      const media = mediaFromLocalFilePath(part.path);
+      const media = mediaFromLocalFilePath(part.path, mediaPolicy);
       return media ? { type: 'image', ...media, filename: path.basename(part.path) } : null;
     })
     .filter(Boolean);
@@ -1373,175 +1418,53 @@ function normalizeModelValue(value) {
   return text;
 }
 
-function textFromContent(content) {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((part) => part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value)
-    .map((part) => part?.text ?? part?.value ?? '')
-    .filter(Boolean)
-    .join('\n');
-}
-
-function mediaFromDataUrl(dataUrl) {
-  const match = String(dataUrl ?? '').match(/^data:([^;,]+);base64,(.+)$/s);
-  if (!match) return null;
-  const [, contentType, encoded] = match;
-  const id = createHash('sha256').update(dataUrl).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, data: Buffer.from(encoded, 'base64') });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
-}
-
-function mediaFromLocalImagePath(filePath) {
+function normalizeLocalFilePath(filePath) {
   const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  const ext = path.extname(target).toLowerCase();
-  const contentType = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-  }[ext];
-  if (!contentType) return null;
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
+  if (!target || target.includes('\0')) return '';
+  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return path.win32.normalize(target);
+  if (path.isAbsolute(target)) return path.normalize(target);
+  return '';
 }
 
-function localFileContentType(filePath) {
-  const ext = path.extname(String(filePath ?? '')).toLowerCase();
+function isWindowsPath(filePath) {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(String(filePath ?? ''));
+}
+
+function isPathInside(root, candidate) {
+  const normalizedRoot = normalizeLocalFilePath(root);
+  const normalizedCandidate = normalizeLocalFilePath(candidate);
+  if (!normalizedRoot || !normalizedCandidate) return false;
+  const pathApi = isWindowsPath(normalizedRoot) || isWindowsPath(normalizedCandidate) ? path.win32 : path;
+  const from = pathApi.normalize(normalizedRoot);
+  const to = pathApi.normalize(normalizedCandidate);
+  const relative = pathApi.relative(from, to);
+  return relative === '' || (!relative.startsWith('..') && !pathApi.isAbsolute(relative));
+}
+
+function mediaPolicyForThread(thread = {}, permissionSettings = {}) {
   return {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.m4v': 'video/mp4',
-    '.cpp': 'text/plain; charset=utf-8',
-    '.h': 'text/plain; charset=utf-8',
-    '.hpp': 'text/plain; charset=utf-8',
-    '.cs': 'text/plain; charset=utf-8',
-    '.js': 'text/plain; charset=utf-8',
-    '.mjs': 'text/plain; charset=utf-8',
-    '.ts': 'text/plain; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.md': 'text/markdown; charset=utf-8',
-    '.txt': 'text/plain; charset=utf-8',
-    '.log': 'text/plain; charset=utf-8',
-    '.diff': 'text/plain; charset=utf-8',
-    '.patch': 'text/plain; charset=utf-8',
-    '.pdf': 'application/pdf',
-  }[ext] ?? 'application/octet-stream';
+    threadId: thread?.id || '',
+    cwd: thread?.cwd || '',
+    sandboxPolicy: normalizeSandboxPolicyValue(permissionSettings?.sandboxPolicy) || 'workspaceWrite',
+  };
 }
 
-function mediaFromLocalFilePath(filePath) {
-  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  try { if (!statSync(target).isFile()) return null; } catch { return null; }
-  const contentType = localFileContentType(target);
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
-  return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
+function canServeLocalFilePath(filePath, policy = {}) {
+  const target = normalizeLocalFilePath(filePath);
+  if (!target) return false;
+  if (!existsSync(target)) return false;
+  try { if (!statSync(target).isFile()) return false; } catch { return false; }
+  if (fileServingMode === 'system') return true;
+  const sandboxPolicy = normalizeSandboxPolicyValue(policy?.sandboxPolicy) || 'workspaceWrite';
+  if (sandboxPolicy === 'dangerFullAccess') return true;
+  return Boolean(policy?.cwd && isPathInside(policy.cwd, target));
 }
 
-function rewriteMarkdownLocalFileLinks(text) {
-  return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
-    const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
-    return media ? `![${alt}](${media.src}?kind=${kind})` : match;
-  }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
-    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
-    return media ? `[${label}](${media.src})` : match;
-  });
-}
-
-function rewriteLocalFileReferences(text, cwd = '') {
-  return String(text ?? '').split(/(```[\s\S]*?```)/g).map((segment) => {
-    if (segment.startsWith('```')) return segment;
-    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment), cwd), cwd);
-  }).join('');
-}
-
-function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
-  return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
-    return media ? `[${rawPath}](${media.src})` : match;
-  });
-}
-
-function resolveMentionedFilePath(rawPath, cwd = '') {
-  const cleaned = String(rawPath ?? '').trim().replace(/^[\'"`(<\[]+|[\'"`)>\].,;:]+$/g, '');
-  if (!cleaned) return '';
-  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
-  if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
-  if (!/[\\/]/.test(cleaned)) return '';
-  const resolved = hostPlatform.resolvePathFromCwd(cwd, cleaned);
-  return existsSync(resolved) ? resolved : '';
-}
-
-function rewriteBareLocalFilePaths(text, cwd = '') {
-  const source = String(text ?? '');
-  return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
-    return media ? `${prefix}[${rawPath}](${media.src})` : match;
-  });
-}
-
-function compactContentParts(content) {
-  if (!Array.isArray(content)) return [];
-  return content.map((part) => {
-    const type = String(part?.type ?? '').toLowerCase();
-    if (type === 'text' || type === 'input_text' || part?.text || part?.value) {
-      const text = part?.text ?? part?.value ?? '';
-      return text ? { type: 'text', text: truncate(text) } : null;
-    }
-    if (type === 'image' || type === 'input_image') {
-      const media = mediaFromDataUrl(part?.url ?? part?.image_url);
-      return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
-    }
-    if (type === 'localimage' || type === 'local_image') {
-      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path);
-      return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
-    }
-    return null;
-  }).filter(Boolean);
-}
-
-function truncate(value, max = 12000) {
-  const text = String(value ?? '');
-  return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
-}
-
-function compactItem(item, cwd = '') {
-  const type = item.type ?? 'unknown';
-  const base = { id: item.id, type };
-
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
-  if (type === 'commandExecution') {
-    return {
-      ...base,
-      command: item.command ?? item.cmd ?? item.argv?.join(' '),
-      status: item.status,
-      exitCode: item.exitCode,
-      output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
-    };
-  }
-  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', cwd)) };
-
-  const json = JSON.stringify(item, null, 2);
-  return { ...base, text: truncate(json, 6000) };
+function localFileScope(_filePath, policy = {}) {
+  if (fileServingMode === 'system') return 'system';
+  return normalizeSandboxPolicyValue(policy?.sandboxPolicy) === 'dangerFullAccess'
+    ? 'dangerFullAccess'
+    : `workspace:${normalizeLocalFilePath(policy?.cwd)}`;
 }
 
 function includes(haystack, needle) {
@@ -1599,7 +1522,7 @@ function listThreadOptionsFromParams(params) {
   };
 }
 
-function buildFacets(threads) {
+async function buildFacets(threads) {
   const repos = new Map();
   const branches = new Map();
   const sources = new Map();
@@ -1608,6 +1531,12 @@ function buildFacets(threads) {
     countFacet(repos, thread.gitInfo?.originUrl || '');
     countFacet(branches, thread.gitInfo?.branch || '');
     countFacet(sources, thread.source || '');
+  }
+  try {
+    const currentGit = await gitInfoForCwd(rootDir);
+    ensureFacet(repos, currentGit.originUrl || '');
+  } catch {
+    // Current repo facet is best-effort only.
   }
 
   return {
@@ -1620,6 +1549,11 @@ function buildFacets(threads) {
 function countFacet(map, value) {
   if (!value) return;
   map.set(value, (map.get(value) ?? 0) + 1);
+}
+
+function ensureFacet(map, value) {
+  if (!value || map.has(value)) return;
+  map.set(value, 0);
 }
 
 function facetList(map) {
@@ -1678,6 +1612,10 @@ async function buildWorktreePlan(body) {
 
 function quoteWinArg(value) {
   return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+function quotePowerShellSingle(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 async function createWorktree(body) {
@@ -1857,6 +1795,10 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+function requireWriteAccess() {
+  if (readOnlyMode) throw Object.assign(new Error('Codex Control is running in read-only mode.'), { statusCode: 403 });
+}
+
 async function probeDirectoryWrite(dir) {
   const targetDir = String(dir ?? '').trim();
   if (!targetDir) return { canWrite: false, reason: 'No directory available.' };
@@ -1928,6 +1870,8 @@ async function runtimeDiagnostics() {
       publicDir,
       host,
       port,
+      readOnly: readOnlyMode,
+      fileServingMode,
       codexHome: codex.codexHome,
       node: process.version,
     },
@@ -1938,8 +1882,10 @@ async function runtimeDiagnostics() {
       canCommit,
       recommendedWritableRoot,
       currentSessionCanChangePermissions: false,
-      permissionMutationSupported: true,
-      permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
+      permissionMutationSupported: !readOnlyMode,
+      permissionMutationReason: readOnlyMode
+        ? 'Codex Control is running in read-only mode. Turn, session, and worktree mutations are disabled.'
+        : 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
     },
     config: {
       workspaceRoots: config.workspaceRoots,
@@ -1947,21 +1893,27 @@ async function runtimeDiagnostics() {
       worktreeWorkflows: Object.fromEntries(Object.entries(config.worktreeWorkflows ?? {}).map(([id, workflow]) => [id, { label: workflow?.label || id }])),
     },
     commands: {
-      restartFromCmd: hostPlatform.restartCommand({ port }),
+      restartFromCmd: hostPlatform.restartCommand({ port, restartTaskName }),
       neededAccess: `Allow this Codex session to write: ${recommendedWritableRoot}`,
     },
   };
 }
 
 async function appSettings() {
-  await codex.ready;
-  const [configResult, modelResult] = await Promise.all([
-    codex.request('config/read', { includeLayers: false }).catch(() => ({})),
-    codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
-  ]);
+  let configResult = {};
+  let modelResult = { data: [] };
+  try {
+    await codex.ready;
+    [configResult, modelResult] = await Promise.all([
+      codex.request('config/read', { includeLayers: false }).catch(() => ({})),
+      codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
+    ]);
+  } catch {
+    // Keep static app settings available even when the child app-server is restarting.
+  }
   const config = normalizeConfigSettings(configResult?.config ?? configResult ?? {});
   const models = Array.isArray(modelResult?.data) ? modelResult.data.map(compactModelInfo).filter((model) => model.id) : [];
-  return { config, models };
+  return { config, models, readOnly: readOnlyMode, fileServingMode };
 }
 
 function compactModelInfo(model = {}) {
@@ -2012,10 +1964,10 @@ function normalizeApprovalPolicyValue(value) {
 }
 
 function sendMediaPath(res, filePath) {
-  const media = mediaFromLocalFilePath(filePath);
+  const media = fileServingMode === 'system' ? mediaFromLocalFilePath(filePath, { sandboxPolicy: 'dangerFullAccess' }) : null;
   if (!media) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Not found');
+    res.writeHead(fileServingMode === 'system' ? 404 : 403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(fileServingMode === 'system' ? 'Not found' : 'System file serving is disabled.');
     return;
   }
   const id = String(media.src ?? '').split('/').pop();
@@ -2083,6 +2035,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/codex/restart' && req.method === 'POST') {
+      requireWriteAccess();
       if (process.env.CODEX_CONTROL_DEV_RESTART !== '1') {
         sendJson(res, 403, { error: 'Codex restart endpoint is disabled. Set CODEX_CONTROL_DEV_RESTART=1 to use it.' });
         return;
@@ -2120,27 +2073,32 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/worktree-plan' && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await buildWorktreePlan(await readJson(req)));
       return;
     }
 
     if (url.pathname === '/api/worktrees' && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await createWorktree(await readJson(req)));
       return;
     }
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
-      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
+      const facetThreads = await codex.listThreads({ includeArchived: true, limit: 500, sourceKinds: defaultSourceKinds });
+      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await buildFacets(facetThreads) });
       return;
     }
 
     if (url.pathname === '/api/threads' && req.method === 'POST') {
+      requireWriteAccess();
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
-      if (!cwd) throw new Error('Choose a worktree first.');
-      const existing = await existingThreadForCwd(cwd);
-      if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
+      if (cwd) {
+        const existing = await existingThreadForCwd(cwd);
+        if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
+      }
       const overrides = turnOverridesFromPayload(payload);
       const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;
@@ -2154,6 +2112,7 @@ const server = createServer(async (req, res) => {
 
     const nameMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/name$/);
     if (nameMatch && req.method === 'POST') {
+      requireWriteAccess();
       const body = await readJson(req);
       sendJson(res, 200, await codex.setThreadName(decodeURIComponent(nameMatch[1]), body.name));
       return;
@@ -2161,18 +2120,21 @@ const server = createServer(async (req, res) => {
 
     const archiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/archive$/);
     if (archiveMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.archiveThread(decodeURIComponent(archiveMatch[1])));
       return;
     }
 
     const unarchiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/unarchive$/);
     if (unarchiveMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.unarchiveThread(decodeURIComponent(unarchiveMatch[1])));
       return;
     }
 
     const turnMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/turn$/);
     if (turnMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(turnMatch[1]);
       const data = await codex.readThread(threadId);
       const payload = await readTurnPayload(req);
@@ -2184,6 +2146,7 @@ const server = createServer(async (req, res) => {
 
     const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move)$/);
     if (queueActionMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(queueActionMatch[1]);
       const queuedId = decodeURIComponent(queueActionMatch[2]);
       const action = queueActionMatch[3];
@@ -2202,6 +2165,7 @@ const server = createServer(async (req, res) => {
 
     const steerMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/steer$/);
     if (steerMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(steerMatch[1]);
       const data = await codex.readThread(threadId);
       const input = await buildTurnInput(threadId, data.thread, req);
@@ -2211,6 +2175,7 @@ const server = createServer(async (req, res) => {
 
     const interruptMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/interrupt$/);
     if (interruptMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.interruptTurn(decodeURIComponent(interruptMatch[1])));
       return;
     }
@@ -2224,7 +2189,7 @@ const server = createServer(async (req, res) => {
     await serveStatic(req, res, url);
   } catch (error) {
     console.error(error);
-    sendError(res, 500, error);
+    sendError(res, error.statusCode || 500, error);
   }
 });
 
