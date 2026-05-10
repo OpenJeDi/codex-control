@@ -226,7 +226,7 @@ class CodexAppServer {
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
       turns: resolvedTurns.map((turn) => normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
-      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(normalizeQueuedMessage),
       permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
     };
@@ -426,14 +426,14 @@ class CodexAppServer {
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
-    return removed ? compactQueuedMessage(removed) : null;
+    return removed ? normalizeQueuedMessage(removed) : null;
   }
 
   moveQueuedMessage(threadId, turnId, direction) {
     const key = String(threadId);
     const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
     const index = current.findIndex((message) => String(message.turnId) === String(turnId));
-    if (index === -1) return current.map(compactQueuedMessage);
+    if (index === -1) return current.map(normalizeQueuedMessage);
     const delta = direction === 'down' ? 1 : -1;
     const target = Math.max(0, Math.min(current.length - 1, index + delta));
     if (target !== index) {
@@ -441,7 +441,7 @@ class CodexAppServer {
       current.splice(target, 0, message);
       this.queuedMessagesByThread.set(key, current);
     }
-    return current.map(compactQueuedMessage);
+    return current.map(normalizeQueuedMessage);
   }
 
   async steerQueuedMessage(threadId, turnId) {
@@ -911,7 +911,7 @@ function normalizeTranscriptTurn(turn, steeredMessages = [], attachments = [], c
   };
 }
 
-function compactQueuedMessage(message) {
+function normalizeQueuedMessage(message) {
   return {
     turnId: message.turnId,
     text: message.text,
@@ -1421,7 +1421,7 @@ function normalizeImageGeneration(item, cwd = '') {
   }];
 }
 
-function compactContentParts(content) {
+function normalizeItemContentParts(content) {
   if (!Array.isArray(content)) return [];
   return content.map((part) => {
     const type = String(part?.type ?? '').toLowerCase();
@@ -1450,7 +1450,7 @@ function normalizeTranscriptItem(item, cwd = '') {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
+  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: normalizeItemContentParts(item.content) };
   if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
   if (type === 'commandExecution') {
     return {
