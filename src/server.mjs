@@ -907,7 +907,7 @@ function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
     model: extractModelFromPayload(turn),
     effort: extractEffortFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
+    items: mergeTurnAttachments((turn.items ?? []).map((item) => normalizeTranscriptItem(item, cwd)), attachments),
   };
 }
 
@@ -1446,7 +1446,7 @@ function truncate(value, max = 12000) {
   return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
 }
 
-function compactItem(item, cwd = '') {
+function normalizeTranscriptItem(item, cwd = '') {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
