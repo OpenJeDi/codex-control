@@ -267,6 +267,39 @@ function restoreOpenTurnDetails(open) {
     if (details && open.has(turn.dataset.turnId || String(index))) details.open = true;
   });
 }
+function captureScrollAnchor(scroller) {
+  if (!scroller) return null;
+  const turns = [...scroller.querySelectorAll('.turn[data-turn-id]')];
+  const top = scroller.getBoundingClientRect().top;
+  let best = null;
+  for (const turn of turns) {
+    const rect = turn.getBoundingClientRect();
+    if (rect.bottom < top) continue;
+    best = {
+      turnId: turn.dataset.turnId,
+      offset: rect.top - top,
+    };
+    break;
+  }
+  return best;
+}
+
+function restoreScrollAnchor(scroller, anchor, fallbackScrollTop = 0) {
+  if (!scroller) return;
+  if (!anchor?.turnId) {
+    scroller.scrollTop = fallbackScrollTop;
+    return;
+  }
+  const target = scroller.querySelector(`.turn[data-turn-id="${CSS.escape(anchor.turnId)}"]`);
+  if (!target) {
+    scroller.scrollTop = fallbackScrollTop;
+    return;
+  }
+  const top = scroller.getBoundingClientRect().top;
+  const rect = target.getBoundingClientRect();
+  scroller.scrollTop += rect.top - top - anchor.offset;
+}
+
 
 function bindDetailScrollControls() {
   const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -700,6 +733,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
+  const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
   const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
   const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
   const previousForm = detailEl.querySelector('#promptForm');
@@ -746,7 +780,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
       if (!quiet || shouldContinueFollowing) scrollDetailToBottom();
-      else if (quiet && scroller) scroller.scrollTop = previousScrollTop;
+      else if (quiet && scroller) restoreScrollAnchor(scroller, scrollAnchor, previousScrollTop);
       updateJumpBottomButton(scroller);
     });
   } catch (error) {
