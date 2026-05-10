@@ -1,4 +1,4 @@
-import { imageContentTypeFromSource } from '../utils/contentTypes.js';
+import { imageContentTypeFromBase64, imageContentTypeFromSource } from '../utils/contentTypes.js';
 
 function mediaFromImageGenerationSource(candidate, context = {}) {
   const candidateText = String(candidate ?? '').trim();
@@ -161,9 +161,36 @@ function isImageGenerationItem(item) {
     || type.startsWith('imagegeneration');
 }
 
+function hasImageOutput(value) {
+  if (!value) return false;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return text.startsWith('data:image/') || (text.length >= 64 && Boolean(imageContentTypeFromBase64(text)));
+  }
+  if (Array.isArray(value)) return value.some(hasImageOutput);
+  if (typeof value !== 'object') return false;
+  const type = String(value.type ?? '').toLowerCase();
+  if ((type === 'image' || type === 'input_image') && (value.image_url || value.url || value.src || value.data)) return true;
+  return [
+    value.image,
+    value.images,
+    value.imageUrl,
+    value.image_url,
+    value.output,
+    value.outputs,
+    value.result,
+    value.results,
+    value.data,
+    value.b64_json,
+    value.base64,
+    value.imageData,
+    value.image_data,
+  ].some(hasImageOutput);
+}
+
 export const imageGenerationNormalizer = {
   canNormalize(item) {
-    return isImageGenerationItem(item);
+    return isImageGenerationItem(item) || (item?.type === 'function_call_output' && hasImageOutput(item.output));
   },
   normalize(item, context = {}) {
     const truncate = context.truncate || ((value) => String(value ?? ''));
