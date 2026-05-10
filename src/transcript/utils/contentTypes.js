@@ -17,6 +17,9 @@ const localContentTypes = {
   '.cs': 'text/plain; charset=utf-8',
   '.js': 'text/plain; charset=utf-8',
   '.mjs': 'text/plain; charset=utf-8',
+  '.ps1': 'text/plain; charset=utf-8',
+  '.cmd': 'text/plain; charset=utf-8',
+  '.bat': 'text/plain; charset=utf-8',
   '.ts': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
@@ -25,6 +28,13 @@ const localContentTypes = {
   '.diff': 'text/plain; charset=utf-8',
   '.patch': 'text/plain; charset=utf-8',
   '.pdf': 'application/pdf',
+};
+
+const localFilenameContentTypes = {
+  '.env': 'text/plain; charset=utf-8',
+  '.env.example': 'text/plain; charset=utf-8',
+  '.gitignore': 'text/plain; charset=utf-8',
+  '.gitattributes': 'text/plain; charset=utf-8',
 };
 
 const imageContentTypes = {
@@ -38,6 +48,8 @@ const imageContentTypes = {
 };
 
 export function localFileContentType(filePath) {
+  const filename = path.basename(String(filePath ?? '')).toLowerCase();
+  if (localFilenameContentTypes[filename]) return localFilenameContentTypes[filename];
   const ext = path.extname(String(filePath ?? '')).toLowerCase();
   return localContentTypes[ext] ?? 'application/octet-stream';
 }

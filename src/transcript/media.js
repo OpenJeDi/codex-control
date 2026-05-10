@@ -109,7 +109,7 @@ export function createTranscriptMediaHelpers({
     if (!cleaned) return '';
     if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
     if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
-    if (!/[\\/]/.test(cleaned)) return '';
+    if (!/[\\/]/.test(cleaned) && !cleaned.startsWith('.')) return '';
     const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
     return existsSync(resolved) ? resolved : '';
   }
