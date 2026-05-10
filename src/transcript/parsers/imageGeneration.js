@@ -8,6 +8,9 @@ function mediaFromImageGenerationSource(candidate, context = {}) {
     return context.mediaFromDataUrl?.(candidateText);
   }
 
+  const base64Media = context.mediaFromBase64Data?.(candidateText);
+  if (base64Media) return base64Media;
+
   const localMedia = context.mediaFromLocalFilePath?.(candidateText);
   if (localMedia) return localMedia;
 
@@ -57,6 +60,13 @@ function mediaFromImageGenerationCandidate(candidate, context = {}) {
     candidate.result,
     candidate.output,
     candidate.data,
+    candidate.b64_json,
+    candidate.b64Json,
+    candidate.base64,
+    candidate.base64Data,
+    candidate.base64_data,
+    candidate.imageData,
+    candidate.image_data,
     candidate.uri,
   ];
 
@@ -89,6 +99,13 @@ function collectImageGenerationCandidates(item) {
     'src',
     'uri',
     'url',
+    'b64_json',
+    'b64Json',
+    'base64',
+    'base64Data',
+    'base64_data',
+    'imageData',
+    'image_data',
     'prompt',
   ];
 

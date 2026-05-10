@@ -7,7 +7,7 @@ The browser can render normalized transcript items and blocks, but it cannot res
 ## Main Files
 
 - `normalize.js`: normalizes Codex turns and items into stable client-facing transcript shapes.
-- `media.js`: resolves local files, data URLs, and local path mentions into `/api/media/:id` URLs.
+- `media.js`: resolves local files, data URLs, raw base64 image data, and local path mentions into `/api/media/:id` URLs.
 - `parsers/`: focused normalizers for raw Codex item/block shapes.
 - `utils/`: low-level text and content-type utilities used by normalizers.
 
@@ -61,6 +61,7 @@ Normalizer modules receive a context object with:
 - `cwd`: the thread working directory for relative path resolution.
 - `truncate(value, max)`: truncates large raw fields before sending to the browser.
 - `mediaFromDataUrl(dataUrl)`: stores data URL media and returns a served media object.
+- `mediaFromBase64Data(base64Data, fallbackContentType)`: stores raw base64 image payloads after validating image bytes.
 - `mediaFromLocalFilePath(filePath)`: stores local file media and returns a served media object.
 - `resolveMentionedFilePath(rawPath, cwd)`: resolves absolute or thread-relative file mentions.
 - `rewriteLocalFileReferences(text, cwd)`: rewrites local media mentions in Markdown-ish text.
