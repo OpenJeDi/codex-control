@@ -133,7 +133,7 @@ class CodexAppServer {
 
   async decorateThread(thread) {
     if (!thread?.id) return thread;
-    const enriched = await enrichThreadGitInfo(thread);
+    const enriched = markArchivedThread(await enrichThreadGitInfo(thread));
     const remembered = this.statusByThread.get(String(thread.id));
     if (remembered) return { ...enriched, status: remembered };
     const external = await inferExternalThreadStatus(enriched);
@@ -743,6 +743,12 @@ function applyRolloutModelHintsToThread(thread, rolloutInfo, turns = []) {
   };
 }
 
+function markArchivedThread(thread) {
+  if (!thread) return thread;
+  const filePath = String(thread.path ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!filePath.includes('/archived_sessions/')) return thread;
+  return { ...thread, archived: true };
+}
 async function inferExternalThreadStatus(thread) {
   const currentType = String(thread?.status?.type ?? '').toLowerCase();
   if (currentType && currentType !== 'notloaded') return null;
