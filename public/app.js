@@ -520,6 +520,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
           <div class="kv">
+            <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
             <strong>Status</strong><span>${escapeHtml(status)}</span>
             <strong>Model</strong><span>${escapeHtml(model || 'unknown')}</span>
             <strong>Model source</strong><span>${escapeHtml(modelSource)}</span>
@@ -575,6 +576,7 @@ function renderEventTimeline(events = []) {
       <time>${escapeHtml(fmtMillis(event.at))}</time>
       <span>${escapeHtml(event.message || event.method || 'Event')}</span>
       ${rowForModel(event)}
+      ${event.turnId ? `<code title="${escapeHtml(event.turnId)}">${escapeHtml(event.turnId.slice(0, 8))}</code>` : ''}
     </div>`;}).join('')}
   </section>`;
 }
@@ -694,6 +696,13 @@ function renderTurn(turn, index) {
   const status = String(turn.status ?? '').toLowerCase();
   const model = modelFromValue(turn);
   const summary = turnSummary(turn);
+  const innerItems = [
+    `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
+    ...(summary.hiddenItems ?? []).map(renderItem),
+    ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
+    renderTurnBreak(turn),
+  ].filter(Boolean);
+  const hasInnerItems = innerItems.length > 0;
   return `<details class="turn ${escapeHtml(status)}">
     <summary class="turn-summary">
       <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${turn.status ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(turn.status)}</span>` : ''}</div>
@@ -708,11 +717,7 @@ function renderTurn(turn, index) {
         </article>
       </div>
     </summary>
-    <div class="turn-full">
-      ${turn.items.map(renderItem).join('')}
-      ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
-      ${renderTurnBreak(turn)}
-    </div>
+    ${hasInnerItems ? `<div class="turn-full">${innerItems.join('')}</div>` : ''}
   </details>`;
 }
 
@@ -736,6 +741,7 @@ function turnSummary(turn) {
   return {
     prompt: truncate(textForItem(userItem), 1800),
     response: truncate(textForItem(finalAgent), 2400),
+    hiddenItems: items.filter((item) => item !== userItem && item !== finalAgent),
   };
 }
 
