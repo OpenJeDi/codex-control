@@ -435,17 +435,16 @@ function effectivePermissionPreference(threadId = '', serverSettings = {}) {
   const defaults = permissionDefaults();
   const server = preferenceFromServerSettings(serverSettings);
   const thread = threadId ? permissionForThread(threadId) ?? {} : {};
-  const explicit = Boolean(
-    defaults.sandboxPolicy || defaults.approvalPolicy || defaults.networkAccess ||
-    server.sandboxPolicy || server.approvalPolicy || server.networkAccess ||
-    thread.sandboxPolicy || thread.approvalPolicy || thread.networkAccess
-  );
-  return {
-    ...configPermissionPreference(),
+  const config = configPermissionPreference();
+  const effective = {
+    ...config,
     ...defaults,
     ...server,
     ...thread,
-    explicit,
+  };
+  return {
+    ...effective,
+    explicit: isPermissionExplicit(effective, config),
   };
 }
 
@@ -460,8 +459,9 @@ function preferenceFromControls(root) {
 
 function applyPermissionPreference(root, pref = permissionDefaults()) {
   const normalized = normalizePermissionPreference(pref);
-  const effective = { ...configPermissionPreference(), ...normalized };
-  const explicit = Boolean(normalized.sandboxPolicy || normalized.approvalPolicy || normalized.networkAccess);
+  const config = configPermissionPreference();
+  const effective = { ...config, ...normalized };
+  const explicit = isPermissionExplicit(effective, config);
   const sandbox = root?.querySelector('[name="sandboxPolicy"]');
   const approval = root?.querySelector('[name="approvalPolicy"]');
   const network = root?.querySelector('[name="networkAccess"]');
@@ -514,6 +514,16 @@ function bindPermissionPreferenceControls(root, threadId = '') {
     });
   });
   syncPermissionControls(root);
+}
+
+function isPermissionExplicit(pref = {}, config = configPermissionPreference()) {
+  const normalized = normalizePermissionPreference(pref);
+  const base = normalizePermissionPreference(config);
+  return Boolean(
+    normalized.sandboxPolicy && normalized.sandboxPolicy !== base.sandboxPolicy ||
+    normalized.approvalPolicy && normalized.approvalPolicy !== base.approvalPolicy ||
+    Boolean(normalized.networkAccess) !== Boolean(base.networkAccess)
+  );
 }
 
 function permissionPresetId(pref = {}) {
@@ -580,6 +590,7 @@ function syncPermissionControls(root, changedControl = null) {
     approvalPolicy: rawApproval?.value || '',
     networkAccess: Boolean(network?.checked),
   });
+  explicit = explicit && isPermissionExplicit(current);
   ensurePermissionPresetOption(preset, current);
   preset.value = permissionPresetId(current);
   preset.dataset.explicit = explicit ? '1' : '0';
@@ -622,12 +633,14 @@ function configModelPreference() {
 function effectiveModelPreference(threadId = '') {
   const defaults = modelDefaults();
   const thread = threadId ? modelForThread(threadId) ?? {} : {};
-  const explicitModel = Boolean(thread.model || defaults.model);
-  const explicitEffort = Boolean(thread.effort || defaults.effort);
   const config = configModelPreference();
+  const selectedModel = thread.model || defaults.model || config.model;
+  const selectedEffort = thread.effort || defaults.effort || config.effort;
+  const explicitModel = isModelExplicit(selectedModel, config.model);
+  const explicitEffort = isEffortExplicit(selectedEffort, config.effort);
   return {
-    model: thread.model || defaults.model || config.model,
-    effort: thread.effort || defaults.effort || config.effort,
+    model: explicitModel ? selectedModel : config.model,
+    effort: explicitEffort ? selectedEffort : config.effort,
     explicitModel,
     explicitEffort,
   };
@@ -642,9 +655,10 @@ function modelPreferenceFromControls(root) {
 
 function applyModelPreference(root, pref = modelDefaults()) {
   const normalized = normalizeModelPreference(pref);
-  const effective = { ...configModelPreference(), ...normalized };
-  const explicitModel = Boolean(normalized.model);
-  const explicitEffort = Boolean(normalized.effort);
+  const config = configModelPreference();
+  const effective = { ...config, ...normalized };
+  const explicitModel = isModelExplicit(effective.model, config.model);
+  const explicitEffort = isEffortExplicit(effective.effort, config.effort);
   const model = root?.querySelector('[data-setting-kind="model"]');
   const effort = root?.querySelector('[data-setting-kind="effort"]');
   const modelValue = root?.querySelector('[name="model"]');
@@ -663,6 +677,18 @@ function applyModelPreference(root, pref = modelDefaults()) {
   if (effortValue) effortValue.value = explicitEffort ? normalized.effort : '';
   updateSettingSource(root?.querySelector('[data-source-for="model"]'), explicitModel);
   updateSettingSource(root?.querySelector('[data-source-for="effort"]'), explicitEffort);
+}
+
+function isModelExplicit(model, configModel = configModelPreference().model) {
+  const value = normalizeModelValue(model);
+  const base = normalizeModelValue(configModel);
+  return Boolean(value && value !== base);
+}
+
+function isEffortExplicit(effort, configEffort = configModelPreference().effort) {
+  const value = effortFromValue(effort);
+  const base = effortFromValue(configEffort);
+  return Boolean(value && value !== base);
 }
 
 function saveModelDefaults(pref) {
@@ -758,10 +784,15 @@ function syncModelControls(root, changedControl = null) {
     }
   }
   if (changedControl === effort) effort.dataset.explicit = '1';
-  modelValue.value = model.dataset.explicit === '1' ? model.value : '';
-  effortValue.value = effort.dataset.explicit === '1' ? effort.value : '';
-  updateSettingSource(root.querySelector('[data-source-for="model"]'), model.dataset.explicit === '1');
-  updateSettingSource(root.querySelector('[data-source-for="effort"]'), effort.dataset.explicit === '1');
+  const config = configModelPreference();
+  const explicitModel = model.dataset.explicit === '1' && isModelExplicit(model.value, config.model);
+  const explicitEffort = effort.dataset.explicit === '1' && isEffortExplicit(effort.value, config.effort);
+  model.dataset.explicit = explicitModel ? '1' : '0';
+  effort.dataset.explicit = explicitEffort ? '1' : '0';
+  modelValue.value = explicitModel ? model.value : '';
+  effortValue.value = explicitEffort ? effort.value : '';
+  updateSettingSource(root.querySelector('[data-source-for="model"]'), explicitModel);
+  updateSettingSource(root.querySelector('[data-source-for="effort"]'), explicitEffort);
 }
 
 function updateSettingSource(dot, explicit) {
