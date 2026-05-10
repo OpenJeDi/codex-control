@@ -1433,7 +1433,7 @@ function listThreadOptionsFromParams(params) {
   };
 }
 
-function buildFacets(threads) {
+async function buildFacets(threads) {
   const repos = new Map();
   const branches = new Map();
   const sources = new Map();
@@ -1442,6 +1442,12 @@ function buildFacets(threads) {
     countFacet(repos, thread.gitInfo?.originUrl || '');
     countFacet(branches, thread.gitInfo?.branch || '');
     countFacet(sources, thread.source || '');
+  }
+  try {
+    const currentGit = await gitInfoForCwd(rootDir);
+    ensureFacet(repos, currentGit.originUrl || '');
+  } catch {
+    // Current repo facet is best-effort only.
   }
 
   return {
@@ -1454,6 +1460,11 @@ function buildFacets(threads) {
 function countFacet(map, value) {
   if (!value) return;
   map.set(value, (map.get(value) ?? 0) + 1);
+}
+
+function ensureFacet(map, value) {
+  if (!value || map.has(value)) return;
+  map.set(value, 0);
 }
 
 function facetList(map) {
@@ -1983,7 +1994,7 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
-      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: buildFacets(threads) });
+      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await buildFacets(threads) });
       return;
     }
 
