@@ -662,7 +662,7 @@ async function loadDetail(id, { quiet = false } = {}) {
       restorePromptFocus(promptForm, draftSelection);
     }
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
-    detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => archiveThread(id));
+    detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => toggleArchiveThread(id, data.thread));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
     detailEl.querySelectorAll('[data-action=steer-turn]').forEach((button) => { button.onclick = () => steerTurn(id, button); });
     bindQueuedMessageControls(id);
@@ -715,6 +715,8 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   const effort = effortFromThread(thread, turns);
   const modelSource = thread?.modelSource || 'unknown';
   const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
+  const archiveLabel = isArchived ? 'Unarchive' : 'Archive';
   return `<div class="detail-shell">
     <div class="session-header">
       <details class="session-meta">
@@ -744,7 +746,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
       </details>
       <div class="detail-actions">
         <button type="button" data-action="rename-thread">Rename</button>
-        <button type="button" data-action="archive-thread">Archive</button>
+        <button type="button" data-action="archive-thread">${archiveLabel}</button>
       </div>
     </div>
     <div class="detail">
@@ -894,7 +896,14 @@ async function renameThread(id, thread) {
   scheduleLoadSessions();
 }
 
-async function archiveThread(id) {
+async function toggleArchiveThread(id, thread = {}) {
+  const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
+  if (isArchived) {
+    await jsonApi(`/api/threads/${encodeURIComponent(id)}/unarchive`, {});
+    scheduleDetailRefresh(id, 150);
+    scheduleLoadSessions();
+    return;
+  }
   const ok = window.confirm('Archive this session? You can include archived sessions from the filter drawer later.');
   if (!ok) return;
   await jsonApi(`/api/threads/${encodeURIComponent(id)}/archive`, {});

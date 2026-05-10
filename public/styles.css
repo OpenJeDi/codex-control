@@ -445,13 +445,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   background: color-mix(in srgb, var(--panel) 97%, black);
   z-index: 4;
 }
-.session-meta { min-width: 0; align-self: center; }
+.session-meta { min-width: 0; align-self: start; }
 .session-summary {
   cursor: pointer;
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto auto auto;
   gap: 8px;
   align-items: center;
+  min-height: 38px;
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
@@ -494,7 +495,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .jump-bottom:hover:not(:disabled) { border-color: var(--accent-2); }
 .jump-bottom:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
-.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-self: center; }
+.detail-actions { display: flex; align-items: center; min-height: 38px; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-self: start; }
 .danger-button { border-color: rgba(212, 135, 135, 0.55); color: var(--danger); }
 .danger-button:hover { border-color: rgba(212, 135, 135, 0.9); background: rgba(212, 135, 135, 0.1); }
 .danger-button:disabled { opacity: 0.65; cursor: wait; }
