@@ -604,8 +604,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .modal-head { justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
 .modal-head p, .hint, .muted { color: var(--muted); font-size: 12px; }
 .modal-card label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
-.modal-actions { display: grid; grid-template-columns: auto 1fr auto auto; }
-.modal-actions span { min-width: 0; }
+.modal-actions { justify-content: flex-end; }
+.modal-actions span { display: none; }
 .image-lightbox {
   position: fixed;
   inset: 0;
@@ -699,5 +699,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .plan-details summary { cursor: pointer; color: var(--muted); font-weight: 700; }
 .command-preview { margin-top: 10px; color: var(--text); }
 .error-text { color: var(--danger); min-height: 18px; }
-.modal-spacer { flex: 1 1 auto; min-width: 24px; }
-.modal-actions > button { flex: 0 0 auto; }
+.modal-spacer { display: none; }
+.modal-actions > button { flex: 0 0 auto; width: auto; }
