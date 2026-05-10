@@ -831,6 +831,20 @@ function openAddRepoDialog() {
   repoUrlInput.focus();
 }
 
+function bindBackdropClose(dialog) {
+  dialog?.addEventListener('click', (event) => {
+    const card = dialog.querySelector('.modal-card');
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    const outside =
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom;
+    if (outside) dialog.close();
+  });
+}
+
 function updateRepoPreview() {
   const repo = normalizeRepoInput(repoUrlInput.value);
   repoError.textContent = '';
@@ -2316,6 +2330,10 @@ repoFilter.addEventListener('change', () => {
 newSessionButton.addEventListener('click', openNewSessionDialog);
 bindPermissionPreferenceControls(newSessionForm);
 bindModelPreferenceControls(newSessionForm);
+bindBackdropClose(newSessionDialog);
+bindBackdropClose(addRepoDialog);
+bindBackdropClose(createWorktreeDialog);
+bindBackdropClose(runtimeDialog);
 addRepoButton.addEventListener('click', openAddRepoDialog);
 addRepoForm.addEventListener('submit', addRepository);
 repoUrlInput.addEventListener('input', updateRepoPreview);
