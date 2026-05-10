@@ -986,53 +986,47 @@ function renderRuntimeDiagnostics(data) {
   const server = data.server ?? {};
   const commands = data.commands ?? {};
   const gitStatus = String(git.status ?? '').trim();
+  const canChangePermissions = Boolean(access.currentSessionCanChangePermissions);
+  const canCommit = Boolean(access.canCommit);
+  const serverReadOnly = Boolean(server.readOnly);
+  const hasGitError = Boolean(git.error);
+  const hasNeededAccessCommand = Boolean(String(commands.neededAccess || '').trim());
+  const hasRestartCommand = Boolean(String(commands.restartFromCmd || '').trim());
+  const statusTone = hasGitError || !canCommit ? 'bad' : (serverReadOnly || !canChangePermissions ? 'warn' : 'ok');
+  const statusText = statusTone === 'ok'
+    ? 'Everything needed for normal local use is available.'
+    : statusTone === 'warn'
+      ? 'Usable, but some access is limited.'
+      : 'Commits or writes are blocked.';
   return `
-    <div class="runtime-grid">
-      ${renderRuntimeCard('Agent session permissions', access.currentSessionCanChangePermissions ? 'mutable' : 'fixed', access.currentSessionCanChangePermissions ? 'ok' : 'warn', [
-        ['Future turn overrides', access.permissionMutationSupported ? 'supported' : 'not exposed'],
-        ['Reason', access.permissionMutationReason || 'unknown'],
-        ['Needed writable root', access.recommendedWritableRoot || '-'],
-      ])}
-      ${renderRuntimeCard('Server commit capability', access.canCommit ? 'ready' : 'blocked', access.canCommit ? 'ok' : 'bad', [
-        ['Server worktree write', access.worktree?.canWrite ? 'yes' : `no: ${access.worktree?.reason || 'unknown'}`],
-        ['Server Git metadata write', access.gitMetadata?.canWrite ? 'yes' : `no: ${access.gitMetadata?.reason || 'unknown'}`],
-      ])}
-      ${renderRuntimeCard('Git context', git.branch || 'unknown branch', git.error ? 'bad' : 'ok', [
-        ['Worktree', git.worktreeRoot || '-'],
-        ['Repo root', git.repositoryRoot || '-'],
-        ['Git metadata', git.gitCommonDir || '-'],
-      ])}
-      ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
-        ['Access mode', server.readOnly ? 'read only' : 'read/write'],
-        ['File serving', server.fileServingMode === 'system' ? 'system files' : 'session policy'],
-        ['App root', server.rootDir || '-'],
-        ['Server platform', server.platform || '-'],
-        ['Config file', server.configPath || '-'],
-        ['Codex home', server.codexHome || '-'],
-        ['Node', server.node || '-'],
-      ])}
-      ${renderRuntimeCard('Worktree config', data.config?.defaultWorktreeWorkflow || 'auto-sibling', data.config?.warnings?.length ? 'warn' : 'ok', [
-        ['Config loaded', data.config?.exists ? 'yes' : 'no'],
-        ['Workspace roots', (data.config?.workspaceRoots || []).join('\n') || '-'],
-        ['Workflows', Object.entries(data.config?.worktreeWorkflows || {}).map(([id, item]) => `${id}: ${item.label || id}`).join('\n') || '-'],
-        ['Warnings', (data.config?.warnings || []).join('\n') || '-'],
-      ])}
-    </div>
-    <section class="runtime-section">
-      <div class="runtime-section-head">
-        <strong>What to grant for this session</strong>
-        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.neededAccess || '')}">Copy</button>
-      </div>
-      <pre>${escapeHtml(commands.neededAccess || 'No access recommendation available.')}</pre>
+    <section class="runtime-summary ${escapeHtml(statusTone)}">
+      <strong>${escapeHtml(statusText)}</strong>
+      <span>${escapeHtml(git.branch || 'No branch detected')}</span>
     </section>
     <section class="runtime-section">
-      <div class="runtime-section-head">
-        <strong>Restart command from cmd.exe</strong>
-        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.restartFromCmd || '')}">Copy</button>
-      </div>
-      <pre>${escapeHtml(commands.restartFromCmd || 'No restart command available.')}</pre>
+      <dl class="runtime-basics">
+        <dt>Server</dt><dd>${escapeHtml(serverReadOnly ? 'read only' : 'read/write')} at ${escapeHtml(`${server.host || '127.0.0.1'}:${server.port || ''}`)}</dd>
+        <dt>Server platform</dt><dd>${escapeHtml(server.platform || '-')}</dd>
+        <dt>Config file</dt><dd>${escapeHtml(server.configPath || '-')}</dd>
+        <dt>File serving</dt><dd>${escapeHtml(server.fileServingMode === 'system' ? 'system files' : 'session policy')}</dd>
+        <dt>Worktree</dt><dd>${escapeHtml(git.worktreeRoot || '-')}</dd>
+        <dt>Worktree config</dt><dd>${escapeHtml(data.config?.defaultWorktreeWorkflow || 'auto-sibling')}${data.config?.warnings?.length ? ' (warnings)' : ''}</dd>
+        <dt>Commit access</dt><dd>${escapeHtml(canCommit ? 'ready' : 'blocked')}</dd>
+        <dt>Permissions</dt><dd>${escapeHtml(canChangePermissions ? 'adjustable for future turns' : access.permissionMutationReason || 'fixed for this session')}</dd>
+      </dl>
     </section>
-    ${gitStatus ? `<section class="runtime-section"><strong>Git status</strong><pre>${escapeHtml(gitStatus)}</pre></section>` : ''}
+    ${data.config ? `<details class="runtime-section runtime-details"${data.config.warnings?.length ? ' open' : ''}>
+      <summary>Show worktree config</summary>
+      <dl class="runtime-basics">
+        <dt>Config loaded</dt><dd>${escapeHtml(data.config.exists ? 'yes' : 'no')}</dd>
+        <dt>Workspace roots</dt><dd>${escapeHtml((data.config.workspaceRoots || []).join('\n') || '-')}</dd>
+        <dt>Workflows</dt><dd>${escapeHtml(Object.entries(data.config.worktreeWorkflows || {}).map(([id, item]) => `${id}: ${item.label || id}`).join('\n') || '-')}</dd>
+        <dt>Warnings</dt><dd>${escapeHtml((data.config.warnings || []).join('\n') || '-')}</dd>
+      </dl>
+    </details>` : ''}
+    ${!canCommit && hasNeededAccessCommand ? renderRuntimeCommand('Grant needed access', commands.neededAccess) : ''}
+    ${hasRestartCommand ? renderRuntimeCommand('Restart command', commands.restartFromCmd) : ''}
+    ${gitStatus ? `<details class="runtime-section runtime-details"><summary>Show git status</summary><pre>${escapeHtml(gitStatus)}</pre></details>` : ''}
   `;
 }
 
@@ -1045,6 +1039,17 @@ function renderRuntimeCard(title, state, tone, rows) {
     <dl>
       ${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}
     </dl>
+  </section>`;
+}
+
+function renderRuntimeCommand(title, command) {
+  const value = String(command ?? '').trim();
+  return `<section class="runtime-section runtime-command">
+    <div class="runtime-section-head">
+      <strong>${escapeHtml(title)}</strong>
+      <button type="button" class="runtime-copy" data-copy="${escapeAttribute(value)}"${value ? '' : ' disabled'}>Copy</button>
+    </div>
+    <pre>${escapeHtml(value || 'No command available.')}</pre>
   </section>`;
 }
 
