@@ -1600,11 +1600,13 @@ function renderModelControls(settings = {}, extraClass = '') {
   const explicitModel = Boolean(settings.explicitModel);
   const explicitEffort = Boolean(settings.explicitEffort);
   return `<div class="model-controls ${escapeHtml(extraClass)}" title="Applies to the next normal turn. Steer cannot change model or thinking.">
+    <span class="setting-group-label">Model</span>
     <span class="setting-source ${explicitModel ? 'explicit' : 'inherited'}" data-source-for="model" title="${explicitModel ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
     <select data-setting-kind="model" aria-label="Model" data-explicit="${explicitModel ? '1' : '0'}">
       ${modelOptions().map((model) => `<option value="${escapeAttribute(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.label)}</option>`).join('')}
     </select>
     <input type="hidden" name="model" value="${explicitModel ? escapeAttribute(selectedModel) : ''}">
+    <span class="setting-group-label">Effort</span>
     <span class="setting-source ${explicitEffort ? 'explicit' : 'inherited'}" data-source-for="effort" title="${explicitEffort ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
     <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="${explicitEffort ? '1' : '0'}">
       ${[...new Set([...effortOptionsForModel(selectedModel), selectedEffort].filter(Boolean))].map((effort) => `<option value="${escapeAttribute(effort)}"${effort === selectedEffort ? ' selected' : ''}>${escapeHtml(effort)}</option>`).join('')}
@@ -1621,6 +1623,7 @@ function renderPermissionControls(settings = {}) {
   const explicit = Boolean(settings.explicit);
   const presetId = permissionPresetId({ sandboxPolicy: sandbox, approvalPolicy: approval, networkAccess: network });
   return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
+    <span class="setting-group-label">Access</span>
     <span class="setting-source ${explicit ? 'explicit' : 'inherited'}" data-source-for="permission" title="${explicit ? 'Explicit override' : 'Using config value'}" aria-hidden="true"></span>
     <select name="permissionPreset" aria-label="Permission preset" data-explicit="${explicit ? '1' : '0'}">
       ${PERMISSION_PRESETS.map((preset) => `<option value="${escapeAttribute(preset.id)}"${preset.id === presetId ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
