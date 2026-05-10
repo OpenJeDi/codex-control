@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
+loadDotEnv(path.join(rootDir, '.env'));
 const publicDir = path.join(rootDir, 'public');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
@@ -731,6 +732,40 @@ function isTurnsNotReadyError(error) {
 function isActiveTurnStatus(status) {
   const text = String(status ?? '').toLowerCase();
   return text === 'inprogress' || text === 'in_progress' || text === 'running';
+}
+
+function loadDotEnv(filePath) {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  const text = readFileSync(filePath, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || process.env[key] !== undefined) {
+      continue;
+    }
+
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    const isQuoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+    if (isQuoted) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  }
 }
 
 function normalizeFileServingMode(value) {

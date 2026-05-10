@@ -11,6 +11,8 @@ npm run dev
 
 Open <http://127.0.0.1:4567>.
 
+Local machine settings can live in `.env`. The file is intentionally ignored by Git; keep reusable examples in `.env.example`.
+
 ## Restarting During Development
 
 ```powershell
