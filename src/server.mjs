@@ -225,7 +225,7 @@ class CodexAppServer {
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id))),
+      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
       queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
       permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
@@ -820,7 +820,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = [], attachments = []) {
+function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
   return {
     id: turn.id,
     status: turn.status,
@@ -830,7 +830,7 @@ function compactTurn(turn, steeredMessages = [], attachments = []) {
     durationMs: turn.durationMs,
     model: extractModelFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map(compactItem), attachments),
+    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
   };
 }
 
@@ -1078,6 +1078,29 @@ function rewriteMarkdownLocalFileLinks(text) {
   });
 }
 
+function rewriteLocalFileReferences(text, cwd = '') {
+  return rewriteBareLocalFilePaths(rewriteMarkdownLocalFileLinks(text), cwd);
+}
+
+function resolveMentionedFilePath(rawPath, cwd = '') {
+  const cleaned = String(rawPath ?? '').trim().replace(/^[\'"`(<\[]+|[\'"`)>\].,;:]+$/g, '');
+  if (!cleaned) return '';
+  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(cleaned)) return existsSync(cleaned) ? cleaned : '';
+  if (!cwd || cleaned.includes('://') || cleaned.startsWith('/api/')) return '';
+  if (!/[\\/]/.test(cleaned)) return '';
+  const resolved = path.win32.resolve(cwd, cleaned.replace(/\//g, '\\'));
+  return existsSync(resolved) ? resolved : '';
+}
+
+function rewriteBareLocalFilePaths(text, cwd = '') {
+  const source = String(text ?? '');
+  return source.replace(/(^|[\s(\[<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
+    const resolved = resolveMentionedFilePath(rawPath, cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    return media ? `${prefix}[${rawPath}](${media.src})` : match;
+  });
+}
+
 function compactContentParts(content) {
   if (!Array.isArray(content)) return [];
   return content.map((part) => {
@@ -1103,12 +1126,12 @@ function truncate(value, max = 12000) {
   return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
 }
 
-function compactItem(item) {
+function compactItem(item, cwd = '') {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
   if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteMarkdownLocalFileLinks(item.text)) };
+  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
   if (type === 'commandExecution') {
     return {
       ...base,
@@ -1118,7 +1141,7 @@ function compactItem(item) {
       output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
     };
   }
-  if (type === 'reasoning') return { ...base, text: truncate(item.text ?? item.summary ?? '') };
+  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', cwd)) };
 
   const json = JSON.stringify(item, null, 2);
   return { ...base, text: truncate(json, 6000) };
