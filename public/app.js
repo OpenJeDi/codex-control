@@ -10,6 +10,10 @@ const splitter = document.querySelector('#splitter');
 const collapseSidebar = document.querySelector('#collapseSidebar');
 const expandSidebar = document.querySelector('#expandSidebar');
 const newSessionButton = document.querySelector('#newSessionButton');
+const runtimeButton = document.querySelector('#runtimeButton');
+const runtimeDialog = document.querySelector('#runtimeDialog');
+const runtimeContent = document.querySelector('#runtimeContent');
+const closeRuntime = document.querySelector('#closeRuntime');
 const newSessionDialog = document.querySelector('#newSessionDialog');
 const newSessionForm = document.querySelector('#newSessionForm');
 const newRepoSelect = document.querySelector('#newRepoSelect');
@@ -192,6 +196,23 @@ function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell
   button.disabled = !shouldShowButton;
 }
 
+function captureOpenTurnDetails() {
+  const open = new Set();
+  detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
+    const details = turn.querySelector('.turn-details');
+    if (details?.open) open.add(turn.dataset.turnId || String(index));
+  });
+  return open;
+}
+
+function restoreOpenTurnDetails(open) {
+  if (!open?.size) return;
+  detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
+    const details = turn.querySelector('.turn-details');
+    if (details && open.has(turn.dataset.turnId || String(index))) details.open = true;
+  });
+}
+
 function bindDetailScrollControls() {
   const scroller = detailEl.querySelector('.detail-shell .detail');
   const button = detailEl.querySelector('.jump-bottom');
@@ -249,7 +270,13 @@ function paramsFromForm() {
 
 async function api(path, options = {}) {
   const res = await fetch(path, { cache: 'no-store', ...options });
-  const json = await res.json();
+  const text = await res.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { error: text || res.statusText };
+  }
   if (!res.ok) throw new Error(json.error || res.statusText);
   return json;
 }
@@ -269,6 +296,89 @@ async function loadHealth() {
   } catch (error) {
     statusEl.textContent = `Codex unavailable: ${error.message}`;
   }
+}
+
+async function openRuntimeDialog() {
+  runtimeDialog.showModal();
+  runtimeContent.innerHTML = '<div class="empty">Loading runtime diagnostics...</div>';
+  try {
+    runtimeContent.innerHTML = renderRuntimeDiagnostics(await api('/api/runtime'));
+    bindRuntimeCopyButtons();
+  } catch (error) {
+    runtimeContent.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderRuntimeDiagnostics(data) {
+  const access = data.access ?? {};
+  const git = data.git ?? {};
+  const server = data.server ?? {};
+  const commands = data.commands ?? {};
+  const gitStatus = String(git.status ?? '').trim();
+  return `
+    <div class="runtime-grid">
+      ${renderRuntimeCard('Agent session permissions', access.currentSessionCanChangePermissions ? 'mutable' : 'fixed', access.currentSessionCanChangePermissions ? 'ok' : 'warn', [
+        ['Future turn overrides', access.permissionMutationSupported ? 'supported' : 'not exposed'],
+        ['Reason', access.permissionMutationReason || 'unknown'],
+        ['Needed writable root', access.recommendedWritableRoot || '-'],
+      ])}
+      ${renderRuntimeCard('Server commit capability', access.canCommit ? 'ready' : 'blocked', access.canCommit ? 'ok' : 'bad', [
+        ['Server worktree write', access.worktree?.canWrite ? 'yes' : `no: ${access.worktree?.reason || 'unknown'}`],
+        ['Server Git metadata write', access.gitMetadata?.canWrite ? 'yes' : `no: ${access.gitMetadata?.reason || 'unknown'}`],
+      ])}
+      ${renderRuntimeCard('Git context', git.branch || 'unknown branch', git.error ? 'bad' : 'ok', [
+        ['Worktree', git.worktreeRoot || '-'],
+        ['Repo root', git.repositoryRoot || '-'],
+        ['Git metadata', git.gitCommonDir || '-'],
+      ])}
+      ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
+        ['App root', server.rootDir || '-'],
+        ['Codex home', server.codexHome || '-'],
+        ['Node', server.node || '-'],
+      ])}
+    </div>
+    <section class="runtime-section">
+      <div class="runtime-section-head">
+        <strong>What to grant for this session</strong>
+        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.neededAccess || '')}">Copy</button>
+      </div>
+      <pre>${escapeHtml(commands.neededAccess || 'No access recommendation available.')}</pre>
+    </section>
+    <section class="runtime-section">
+      <div class="runtime-section-head">
+        <strong>Restart command from cmd.exe</strong>
+        <button type="button" class="runtime-copy" data-copy="${escapeAttribute(commands.restartFromCmd || '')}">Copy</button>
+      </div>
+      <pre>${escapeHtml(commands.restartFromCmd || 'No restart command available.')}</pre>
+    </section>
+    ${gitStatus ? `<section class="runtime-section"><strong>Git status</strong><pre>${escapeHtml(gitStatus)}</pre></section>` : ''}
+  `;
+}
+
+function renderRuntimeCard(title, state, tone, rows) {
+  return `<section class="runtime-card ${escapeHtml(tone)}">
+    <div class="runtime-card-head">
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(state)}</span>
+    </div>
+    <dl>
+      ${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}
+    </dl>
+  </section>`;
+}
+
+function bindRuntimeCopyButtons() {
+  runtimeContent.querySelectorAll('.runtime-copy').forEach((button) => {
+    button.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy || '');
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+      } catch {
+        window.alert('Could not copy text.');
+      }
+    };
+  });
 }
 
 async function loadSessions({ quiet = false } = {}) {
@@ -474,7 +584,19 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
-  const shouldContinueFollowing = quiet && id === previousId && isNearBottom(previousScroller);
+  const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
+  const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
+  const previousForm = detailEl.querySelector('#promptForm');
+  const preservePromptForm = quiet && id === previousId && previousForm;
+  const draftPrompt = quiet && id === previousId ? previousForm?.elements?.prompt?.value ?? '' : '';
+  const draftFiles = quiet && id === previousId ? [...(previousForm?.elements?.files?.files ?? [])] : [];
+  const previousTextarea = previousForm?.querySelector('textarea[name="prompt"]');
+  const restoreComposerFocus = quiet && id === previousId && document.activeElement === previousTextarea;
+  const draftSelection = restoreComposerFocus ? {
+    start: previousTextarea.selectionStart,
+    end: previousTextarea.selectionEnd,
+    direction: previousTextarea.selectionDirection,
+  } : null;
   activeId = id;
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
@@ -484,14 +606,25 @@ async function loadDetail(id, { quiet = false } = {}) {
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     detailEl.className = 'detail-host';
-    detailEl.innerHTML = renderDetail(data);
-    const promptForm = detailEl.querySelector('#promptForm');
-    promptForm?.addEventListener('submit', (event) => submitPrompt(event, id));
-    bindPromptKeyboard(promptForm);
+    const rendered = renderDetail(data);
+    const patched = preservePromptForm && patchDetailPreservingComposer(rendered, data.thread);
+    let promptForm = patched ? previousForm : null;
+    if (!patched) {
+      detailEl.innerHTML = rendered;
+      promptForm = detailEl.querySelector('#promptForm');
+      promptForm?.addEventListener('submit', (event) => submitPrompt(event, id));
+      bindPromptKeyboard(promptForm);
+      bindPromptPaste(promptForm);
+      restorePromptDraft(promptForm, draftPrompt, draftFiles);
+      restorePromptFocus(promptForm, draftSelection);
+    }
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => archiveThread(id));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
-    detailEl.querySelector('[data-action=steer-turn]')?.addEventListener('click', () => steerTurn(id));
+    detailEl.querySelectorAll('[data-action=steer-turn]').forEach((button) => { button.onclick = () => steerTurn(id, button); });
+    bindQueuedMessageControls(id);
+    restoreOpenTurnDetails(openTurnDetails);
+    bindCodeCopyControls();
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -505,7 +638,33 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
 }
 
-function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
+function patchDetailPreservingComposer(renderedHtml, thread) {
+  const currentShell = detailEl.querySelector('.detail-shell');
+  const currentForm = currentShell?.querySelector('#promptForm');
+  if (!currentShell || !currentForm) return false;
+
+  const container = document.createElement('div');
+  container.innerHTML = renderedHtml;
+  const nextShell = container.querySelector('.detail-shell');
+  if (!nextShell) return false;
+
+  for (const selector of ['.session-header', '.detail', '.jump-bottom']) {
+    const current = currentShell.querySelector(selector);
+    const next = nextShell.querySelector(selector);
+    if (current && next) current.replaceWith(next);
+  }
+
+  const currentQueue = currentShell.querySelector('.queued-messages');
+  const nextQueue = nextShell.querySelector('.queued-messages');
+  if (currentQueue && nextQueue) currentQueue.replaceWith(nextQueue);
+  else if (currentQueue && !nextQueue) currentQueue.remove();
+  else if (!currentQueue && nextQueue) currentForm.before(nextQueue);
+
+  syncPromptComposerState(currentForm, thread);
+  return true;
+}
+
+function renderDetail({ thread, turns, queuedMessages = [], events = [], permissionSettings = {} }) {
   const status = statusLabel(thread);
   const statusCss = statusClass(thread);
   const model = modelFromThread(thread, turns);
@@ -539,7 +698,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
       <div class="detail-actions">
         <button type="button" data-action="rename-thread">Rename</button>
         <button type="button" data-action="archive-thread">Archive</button>
-        ${isBusyThread(thread) ? '<button type="button" data-action="steer-turn">Steer</button><button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>' : ''}
       </div>
     </div>
     <div class="detail">
@@ -555,9 +713,43 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
           <input name="files" type="file" multiple>
           <span>+</span>
         </label>
+        <span class="attachment-status" aria-live="polite"></span>
+        ${renderPermissionControls(permissionSettings)}
+        <span class="prompt-spacer"></span>
+        ${isBusyThread(thread) ? '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button><button type="button" data-action="steer-turn">Steer now</button>' : ''}
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
+      <div class="attachment-preview" aria-live="polite"></div>
     </form>
+  </div>`;
+}
+
+function selectedAttribute(value, expected) {
+  return value === expected ? ' selected' : '';
+}
+
+function checkedAttribute(value) {
+  return value ? ' checked' : '';
+}
+
+function renderPermissionControls(settings = {}) {
+  const sandbox = settings.sandboxPolicy?.type || '';
+  const approval = settings.approvalPolicy || '';
+  const network = Boolean(settings.sandboxPolicy?.networkAccess);
+  return `<div class="permission-controls" title="Applies to the next normal turn. Steer cannot change permissions.">
+    <select name="sandboxPolicy" aria-label="Sandbox policy">
+      <option value=""${selectedAttribute(sandbox, '')}>config sandbox</option>
+      <option value="readOnly"${selectedAttribute(sandbox, 'readOnly')}>read only</option>
+      <option value="workspaceWrite"${selectedAttribute(sandbox, 'workspaceWrite')}>workspace write</option>
+      <option value="dangerFullAccess"${selectedAttribute(sandbox, 'dangerFullAccess')}>danger full access</option>
+    </select>
+    <select name="approvalPolicy" aria-label="Approval policy">
+      <option value=""${selectedAttribute(approval, '')}>config approvals</option>
+      <option value="onRequest"${selectedAttribute(approval, 'onRequest')}>approve on request</option>
+      <option value="unlessTrusted"${selectedAttribute(approval, 'unlessTrusted')}>unless trusted</option>
+      <option value="never"${selectedAttribute(approval, 'never')}>never approve</option>
+    </select>
+    <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"${checkedAttribute(network)}> network</label>
   </div>`;
 }
 
@@ -594,12 +786,45 @@ function renderBusyIndicator(thread) {
 function renderQueuedMessages(messages = []) {
   if (!messages.length) return '';
   return `<div class="queued-messages" aria-live="polite">
-    <div class="queued-title">Queued for after current run</div>
-    ${messages.map((message) => `<div class="queued-message">
-      <div class="queued-meta">Turn ${escapeHtml(message.turnId || '')}</div>
+    <div class="queued-title">Queued messages</div>
+    ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeHtml(message.turnId || '')}">
+      <div class="queued-head">
+        <span></span>
+        <div class="queued-actions">
+          <button type="button" data-queue-action="up" ${index === 0 ? 'disabled' : ''}>Up</button>
+          <button type="button" data-queue-action="down" ${index === messages.length - 1 ? 'disabled' : ''}>Down</button>
+          <button type="button" data-queue-action="steer">Steer now</button>
+          <button type="button" data-queue-action="remove">Remove</button>
+        </div>
+      </div>
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
     </div>`).join('')}
   </div>`;
+}
+
+function bindQueuedMessageControls(threadId) {
+  detailEl.querySelectorAll('.queued-message[data-queued-id]').forEach((row) => {
+    row.querySelectorAll('[data-queue-action]').forEach((button) => {
+      button.addEventListener('click', () => updateQueuedMessage(threadId, row.dataset.queuedId, button.dataset.queueAction, button));
+    });
+  });
+}
+
+async function updateQueuedMessage(threadId, queuedId, action, button) {
+  if (!threadId || !queuedId || !action) return;
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = '...';
+  try {
+    const body = action === 'up' || action === 'down' ? { direction: action } : {};
+    await jsonApi(`/api/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedId)}/${action === 'up' || action === 'down' ? 'move' : action}`, body);
+    scheduleDetailRefresh(threadId, 100);
+    scheduleLoadSessions();
+  } catch (error) {
+    window.alert(error.message);
+    button.disabled = false;
+    button.textContent = label;
+  }
 }
 
 async function renameThread(id, thread) {
@@ -621,9 +846,8 @@ async function archiveThread(id) {
   scheduleLoadSessions();
 }
 
-async function steerTurn(id) {
+async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   const form = detailEl.querySelector('#promptForm');
-  const button = detailEl.querySelector('[data-action=steer-turn]');
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -639,7 +863,7 @@ async function steerTurn(id) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
-    form.reset();
+    clearPromptComposerContent(form);
     scheduleDetailRefresh(id, 250);
   } catch (error) {
     window.alert(error.message);
@@ -683,7 +907,7 @@ async function submitPrompt(event, id) {
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
-    form.reset();
+    clearPromptComposerContent(form);
     scheduleDetailRefresh(id, 700);
     scheduleLoadSessions();
   } catch (error) {
@@ -704,6 +928,125 @@ function bindPromptKeyboard(form) {
   });
 }
 
+function bindPromptPaste(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (!form || !textarea || !fileInput) return;
+
+  fileInput.addEventListener('change', () => updateAttachmentStatus(form));
+  textarea.addEventListener('paste', (event) => {
+    const files = imageFilesFromClipboard(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    appendFiles(fileInput, files);
+    updateAttachmentStatus(form);
+  });
+}
+
+function imageFilesFromClipboard(clipboardData) {
+  if (!clipboardData) return [];
+  const fromItems = [...(clipboardData.items ?? [])]
+    .filter((item) => item.kind === 'file' && String(item.type).toLowerCase().startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (fromItems.length) return fromItems;
+  return [...(clipboardData.files ?? [])].filter((file) => String(file.type).toLowerCase().startsWith('image/'));
+}
+
+function appendFiles(input, files) {
+  if (!input || !files.length) return;
+  const transfer = new DataTransfer();
+  for (const file of input.files ?? []) transfer.items.add(file);
+  for (const file of files) transfer.items.add(file);
+  input.files = transfer.files;
+}
+
+function updateAttachmentStatus(form) {
+  const status = form?.querySelector('.attachment-status');
+  const preview = form?.querySelector('.attachment-preview');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (!status || !fileInput) return;
+  const files = [...(fileInput.files ?? [])];
+  const count = files.length;
+  status.textContent = count ? `${count} attachment${count === 1 ? '' : 's'} ready` : '';
+  if (!preview) return;
+  preview.innerHTML = files.map((file) => {
+    const isImage = String(file.type).toLowerCase().startsWith('image/');
+    if (isImage) {
+      const src = URL.createObjectURL(file);
+      return `<figure class="attachment-thumb">
+        <button type="button" class="attachment-remove" data-index="${escapeAttribute(files.indexOf(file))}" aria-label="Remove attachment">x</button>
+        <img src="${escapeAttribute(src)}" alt="${escapeAttribute(file.name || 'pasted image')}" loading="lazy">
+        <figcaption>${escapeHtml(file.name || 'pasted image')}</figcaption>
+      </figure>`;
+    }
+    return `<div class="attachment-file">
+      <button type="button" class="attachment-remove" data-index="${escapeAttribute(files.indexOf(file))}" aria-label="Remove attachment">x</button>
+      <span>${escapeHtml(file.name || 'attachment')}</span>
+      <small>${escapeHtml(file.type || 'file')}</small>
+    </div>`;
+  }).join('');
+  preview.querySelectorAll('.attachment-remove').forEach((button) => {
+    button.addEventListener('click', () => {
+      removeAttachmentAt(fileInput, Number(button.dataset.index));
+      updateAttachmentStatus(form);
+    });
+  });
+}
+
+function removeAttachmentAt(input, removeIndex) {
+  if (!input || !Number.isInteger(removeIndex)) return;
+  const transfer = new DataTransfer();
+  [...(input.files ?? [])].forEach((file, index) => {
+    if (index !== removeIndex) transfer.items.add(file);
+  });
+  input.files = transfer.files;
+}
+
+function syncPromptComposerState(form, thread) {
+  if (!form) return;
+  const busy = isBusyThread(thread);
+  const submit = form.querySelector('button[type="submit"]');
+  const actions = form.querySelector('.prompt-actions');
+  if (submit) submit.textContent = busy ? 'Send after current' : 'Send';
+  if (!actions) return;
+  const steer = actions.querySelector('[data-action="steer-turn"]');
+  const stop = actions.querySelector('[data-action="interrupt-turn"]');
+  if (busy && !stop) submit?.insertAdjacentHTML('beforebegin', '<button type="button" class="danger-button" data-action="interrupt-turn">Stop</button>');
+  if (busy && !steer) submit?.insertAdjacentHTML('beforebegin', '<button type="button" data-action="steer-turn">Steer now</button>');
+  if (!busy && stop) stop.remove();
+  if (!busy && steer) steer.remove();
+}
+
+function restorePromptDraft(form, prompt, files = []) {
+  if (!form || (!prompt && !files.length)) return;
+  const textarea = form.querySelector('textarea[name="prompt"]');
+  const fileInput = form.querySelector('input[name="files"]');
+  if (textarea && prompt) textarea.value = prompt;
+  if (fileInput && files.length) {
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(file);
+    fileInput.files = transfer.files;
+  }
+  updateAttachmentStatus(form);
+}
+
+function restorePromptFocus(form, selection) {
+  if (!form || !selection) return;
+  const textarea = form.querySelector('textarea[name="prompt"]');
+  if (!textarea) return;
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(selection.start ?? textarea.value.length, selection.end ?? textarea.value.length, selection.direction ?? 'none');
+}
+
+function clearPromptComposerContent(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  const fileInput = form?.querySelector('input[name="files"]');
+  if (textarea) textarea.value = '';
+  if (fileInput) fileInput.value = '';
+  updateAttachmentStatus(form);
+}
+
 function renderTurn(turn, index, thread) {
   const threadBusy = isBusyThread(thread);
   const turnStatus = String(turn.status ?? '').toLowerCase();
@@ -720,8 +1063,9 @@ function renderTurn(turn, index, thread) {
     ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
     renderTurnBreak(turn, statusValue, threadBusy),
   ].filter(Boolean);
-  const hasInnerItems = innerItems.length > 0;
-  return `<section class="turn ${escapeHtml(status)}">
+  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || (turn.steeredMessages?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
+  const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
+  return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
     <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
     <div class="turn-compact">
       <article>
@@ -732,10 +1076,10 @@ function renderTurn(turn, index, thread) {
         <summary>Intermediate activity</summary>
         <div class="turn-full">${innerItems.join('')}</div>
       </details>` : ''}
-      <article>
+      ${hasResponse ? `<article>
         <div class="item-type">Response</div>
-        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response || '(no response yet)') : renderMarkdownText(summary.response || '(no response yet)')}
-      </article>
+        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response) : renderMarkdownText(summary.response)}
+      </article>` : ''}
     </div>
   </section>`;
 }
@@ -758,8 +1102,8 @@ function turnSummary(turn) {
   const agentItems = items.filter((item) => item.type === 'agentMessage');
   const finalAgent = [...agentItems].reverse().find((item) => item.phase !== 'commentary') ?? agentItems[agentItems.length - 1];
   return {
-    prompt: truncate(textForItem(userItem), 1800),
-    response: truncate(textForItem(finalAgent), 2400),
+    prompt: textForItem(userItem),
+    response: textForItem(finalAgent),
     promptItem: userItem,
     responseItem: finalAgent,
     hiddenItems: items.filter((item) => item !== userItem && item !== finalAgent),
@@ -807,18 +1151,47 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
+function mediaKindFromSrc(src) {
+  const raw = String(src ?? '').toLowerCase();
+  if (raw.includes('kind=video')) return 'video';
+  if (raw.includes('kind=image')) return 'image';
+  const clean = raw.split('?')[0];
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(clean) || clean.startsWith('/api/media/')) return 'image';
+  if (/\.(mp4|webm|mov|m4v)$/.test(clean)) return 'video';
+  return 'file';
+}
+
+function renderMarkdownMedia(src, label = '', embedded = false) {
+  const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
+  const caption = escapeHtml(label || 'media');
+  const kind = mediaKindFromSrc(cleanSrc);
+  if (embedded && kind === 'image') {
+    return `<figure class="session-image"><img src="${escapeAttribute(cleanSrc)}" alt="${escapeAttribute(label || 'Session image')}" loading="lazy"><figcaption>${caption}</figcaption></figure>`;
+  }
+  if (embedded && kind === 'video') {
+    return `<figure class="session-image session-video"><video src="${escapeAttribute(cleanSrc)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
+  }
+  return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
+}
+
 function renderInlineMarkdown(text) {
   const codeSpans = [];
+  const media = [];
   let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
     const token = `@@CODE${codeSpans.length}@@`;
     codeSpans.push(`<code>${escapeHtml(code)}</code>`);
     return token;
+  }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
+    const token = `@@MEDIA${media.length}@@`;
+    media.push(renderMarkdownMedia(src, alt, true));
+    return token;
   });
   html = escapeHtml(html);
-  html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
+  html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
   for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
+  for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
   return html;
 }
 
@@ -877,9 +1250,24 @@ function renderMarkdownBlocks(text) {
 function renderMarkdownText(text) {
   const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
   return `<div class="markdown-body">${segments.map((segment, index) => {
-    if (index % 2 === 1) return `<pre class="md-code"><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
+    if (index % 2 === 1) return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
     return renderMarkdownBlocks(segment);
   }).join('')}</div>`;
+}
+
+function bindCodeCopyControls() {
+  detailEl.querySelectorAll('.copy-code').forEach((button) => {
+    button.onclick = async () => {
+      const code = button.parentElement?.querySelector('code')?.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(code);
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+      } catch {
+        window.alert('Could not copy code.');
+      }
+    };
+  });
 }
 
 function shouldRenderMarkdown(item) {
@@ -1011,6 +1399,8 @@ repoFilter.addEventListener('change', () => {
   loadSessions();
 });
 newSessionButton.addEventListener('click', openNewSessionDialog);
+runtimeButton.addEventListener('click', openRuntimeDialog);
+closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
 createWorktreeButton.addEventListener('click', createFeatureWorktree);

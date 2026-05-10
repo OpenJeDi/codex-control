@@ -17,6 +17,7 @@
         <div class="sidebar-actions">
           <button id="collapseSidebar" type="button" title="Hide sessions">◀</button>
           <strong>Sessions</strong>
+          <button id="runtimeButton" type="button">Runtime</button>
           <button id="newSessionButton" class="sidebar-primary" type="button">New</button>
         </div>
 
@@ -82,6 +83,22 @@
       </label>
       <div id="newWorktreeHint" class="hint"></div>
 
+      <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session.">
+        <select name="sandboxPolicy" aria-label="Sandbox policy">
+          <option value="">config sandbox</option>
+          <option value="readOnly">read only</option>
+          <option value="workspaceWrite">workspace write</option>
+          <option value="dangerFullAccess">danger full access</option>
+        </select>
+        <select name="approvalPolicy" aria-label="Approval policy">
+          <option value="">config approvals</option>
+          <option value="onRequest">approve on request</option>
+          <option value="unlessTrusted">unless trusted</option>
+          <option value="never">never approve</option>
+        </select>
+        <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"> network</label>
+      </div>
+
       <label>
         First prompt <span class="muted">optional</span>
         <textarea name="prompt" rows="4" placeholder="Start this lane with..."></textarea>
@@ -97,6 +114,21 @@
         <span></span>
         <button id="cancelNewSession" type="button">Cancel</button>
         <button type="submit">Start session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="runtimeDialog" class="modal runtime-modal">
+    <form class="modal-card runtime-card-shell" method="dialog">
+      <div class="modal-head">
+        <div>
+          <strong>Runtime access</strong>
+          <p>Shows what this Codex Control server and the current agent session can actually do.</p>
+        </div>
+        <button id="closeRuntime" type="button" title="Close">Close</button>
+      </div>
+      <div id="runtimeContent" class="runtime-content">
+        Loading runtime diagnostics...
       </div>
     </form>
   </dialog>
