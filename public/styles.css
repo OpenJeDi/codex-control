@@ -278,6 +278,12 @@ body.sidebar-collapsed .splitter { display: none; }
 .compact-item summary span { color: var(--text); font-weight: 700; }
 .compact-item summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact-item pre { margin-top: 10px; max-height: 420px; overflow: auto; }
+.item-block { display: grid; gap: 8px; }
+.item-block .session-image { margin: 0; }
+.item-block-details { border-top: 1px dashed var(--line); padding-top: 8px; }
+.item-block-details summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; }
+.image-generation-prompt { margin: 0; color: var(--muted); font-size: 12px; }
+.image-generation-preview { display: grid; gap: 8px; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .session-image { margin: 10px 0 0; display: grid; gap: 6px; }
 .session-image img { max-width: min(100%, 760px); max-height: 520px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); object-fit: contain; cursor: zoom-in; }

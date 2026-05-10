@@ -1,3 +1,5 @@
+import { createTranscriptBlockRenderer } from './transcript/registry.js';
+
 const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
 const detailEl = document.querySelector('#detail');
@@ -36,6 +38,16 @@ const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+let transcriptBlockRenderer;
+function getTranscriptBlockRenderer() {
+  if (transcriptBlockRenderer) return transcriptBlockRenderer;
+  transcriptBlockRenderer = createTranscriptBlockRenderer({
+    escapeHtml,
+    escapeAttribute,
+  });
+  return transcriptBlockRenderer;
+}
+
 const truncate = (value, max = 12000) => {
   const text = String(value ?? '');
   return text.length > max ? `${text.slice(0, max)}\n... truncated ...` : text;
@@ -1201,6 +1213,13 @@ function itemLabel(item) {
   if (item.type === 'agentMessage') return item.phase === 'commentary' ? 'Agent note' : 'Agent response';
   if (item.type === 'commandExecution') return 'Command';
   if (item.type === 'reasoning') return 'Reasoning summary';
+  if (String(item.type).toLowerCase() === 'imagegeneration') return 'Image generation';
+  if (
+    Array.isArray(item?.renderBlocks)
+    && item.renderBlocks.some((block) => String(block?.kind || block?.type || '').toLowerCase() === 'imagegeneration')
+  ) {
+    return 'Image generation';
+  }
   if (String(item.type).toLowerCase().includes('file')) return 'File change';
   return String(item.type ?? 'Item').replace(/([a-z])([A-Z])/g, '$1 $2');
 }
@@ -1470,9 +1489,17 @@ function renderItem(item) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
+  const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
   const preview = noisy ? body.slice(0, 220).replace(/\s+/g, ' ').trim() : body;
+
+  if (customBlocks) {
+    return `<article class="item ${escapeHtml(item.type)}">
+      <div class="item-type">${escapeHtml(label)}</div>
+      ${customBlocks}
+    </article>`;
+  }
 
   if (noisy) {
     return `<article class="item ${escapeHtml(item.type)} compact-item">
@@ -1490,6 +1517,13 @@ function renderItem(item) {
     <div class="item-type">${escapeHtml(label)}</div>
     ${renderContentParts(item, body)}
   </article>`;
+}
+
+function renderItemBlocks(item) {
+  const blocks = Array.isArray(item?.renderBlocks) ? item.renderBlocks : [];
+  if (!blocks.length) return '';
+  const renderer = getTranscriptBlockRenderer();
+  return renderer(blocks);
 }
 
 function scheduleLoadSessions() {
