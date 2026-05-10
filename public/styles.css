@@ -230,16 +230,6 @@ body.sidebar-collapsed .splitter { display: none; }
 .turn { border-top: 1px solid var(--line); padding: 14px 0; }
 .turn-summary { cursor: pointer; display: grid; gap: 10px; list-style: none; }
 .turn-summary::-webkit-details-marker { display: none; }
-.turn-summary::before {
-  content: "Show details";
-  justify-self: end;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.turn[open] .turn-summary::before { content: "Hide details"; }
 .turn-compact {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -362,15 +352,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   list-style: none;
 }
 .session-summary::-webkit-details-marker { display: none; }
-.session-summary::after {
-  content: "Details";
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.session-meta[open] .session-summary::after { content: "Hide"; }
 .session-summary h2 {
   margin: 0;
   min-width: 0;
