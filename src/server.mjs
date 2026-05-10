@@ -1165,10 +1165,22 @@ function renderConfigTemplate(template, context) {
   return String(template ?? '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => context[key] ?? '');
 }
 
+function configuredWorkspaceRoot(sourcePath, config) {
+  const roots = (config.workspaceRoots ?? []).map((root) => String(root ?? '').trim()).filter(Boolean);
+  if (!roots.length) return '';
+  const source = hostPlatform.resolvePathFromCwd(process.cwd(), sourcePath);
+  const matches = roots
+    .map((root) => hostPlatform.resolvePathFromCwd(process.cwd(), root))
+    .filter((root) => source.toLowerCase().startsWith(root.toLowerCase()))
+    .sort((a, b) => b.length - a.length);
+  return matches[0] ?? roots[0];
+}
+
 function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
   const workflowId = String(config.defaultWorktreeWorkflow || defaultConfig.defaultWorktreeWorkflow);
   const workflow = config.worktreeWorkflows?.[workflowId] ?? defaultConfig.worktreeWorkflows['auto-sibling'];
   const autoWorktreeRoot = repoWorktreeRoot(sourcePath);
+  const workspaceRoot = configuredWorkspaceRoot(sourcePath, config);
   const context = {
     sourcePath,
     sourceName: hostPlatform.basename(sourcePath),
@@ -1177,7 +1189,7 @@ function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
     branchName: String(branch ?? ''),
     branchFolder: branchFolderName(branch),
     autoWorktreeRoot,
-    workspaceRoot: config.workspaceRoots?.[0] ?? '',
+    workspaceRoot,
   };
 
   const explicitRoot = String(requestedRoot ?? '').trim();
@@ -1186,6 +1198,7 @@ function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
     return {
       workflowId: 'custom-root',
       workflowLabel: 'Custom root',
+      workspaceRoot,
       targetRoot,
       targetPath: hostPlatform.joinPath(targetRoot, context.branchName),
     };
@@ -1196,6 +1209,7 @@ function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
   return {
     workflowId,
     workflowLabel: workflow.label || workflowId,
+    workspaceRoot,
     targetRoot: hostPlatform.dirname(targetPath),
     targetPath,
   };
@@ -1699,7 +1713,7 @@ async function buildWorktreePlan(body) {
     branchExists,
     targetRoot: target.targetRoot,
     targetPath,
-    workflow: { id: target.workflowId, label: target.workflowLabel },
+    workflow: { id: target.workflowId, label: target.workflowLabel, workspaceRoot: target.workspaceRoot },
     commands: [{ display, command: 'git', args }],
   };
 }
