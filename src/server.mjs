@@ -32,50 +32,81 @@ class CodexAppServer {
     this.eventsByThread = new Map();
     this.eventClients = new Set();
     this.watchers = [];
+    this.restartInProgress = null;
+    this.isManualShutdown = false;
+    this.startInProgress = null;
     this.threadsChangedTimer = null;
     this.pendingChangedThreadIds = new Set();
     this.codexHome = null;
+    this.lastRestartAt = 0;
     this.ready = this.start();
   }
 
   start() {
-    this.proc = spawn('codex', ['app-server'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
-    });
+    if (this.startInProgress) return this.startInProgress;
+    this.startInProgress = (async () => {
+      const proc = spawn('codex', ['app-server'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      });
+      this.proc = proc;
 
-    this.proc.stderr.on('data', (chunk) => {
-      const text = String(chunk).trim();
-      if (text) console.warn('[codex]', text);
-    });
+      proc.stderr.on('data', (chunk) => {
+        const text = String(chunk).trim();
+        if (text) console.warn('[codex]', text);
+      });
 
-    this.proc.on('exit', (code, signal) => {
-      const err = new Error(`codex app-server exited (${code ?? signal})`);
-      for (const { reject, timer } of this.pending.values()) {
-        clearTimeout(timer);
-        reject(err);
-      }
-      this.pending.clear();
-      this.broadcast('codex-exit', { code, signal });
-      this.ready = Promise.reject(err);
-    });
+      proc.on('exit', (code, signal) => {
+        if (this.proc !== proc) return;
+        const err = new Error(`codex app-server exited (${code ?? signal})`);
+        for (const { reject, timer } of this.pending.values()) {
+          clearTimeout(timer);
+          reject(err);
+        }
+        this.pending.clear();
+        this.broadcast('codex-exit', { code, signal });
+        this.activeTurnByThread.clear();
+        if (!this.isManualShutdown) {
+          setTimeout(() => {
+            this.restartCodex().catch((error) => {
+              console.error('[codex-control] automatic codex restart failed:', error.message);
+            });
+          }, 250);
+        }
+      });
 
-    const rl = readline.createInterface({ input: this.proc.stdout });
-    rl.on('line', (line) => this.handleLine(line));
+      proc.on('error', (error) => {
+        if (this.proc !== proc) return;
+        const startupError = new Error(`codex app-server process error: ${error.message}`);
+        for (const { reject, timer } of this.pending.values()) {
+          clearTimeout(timer);
+          reject(startupError);
+        }
+        this.pending.clear();
+      });
 
-    return this.request('initialize', {
-      clientInfo: {
-        name: 'codex_control',
-        title: 'Codex Control',
-        version: '0.1.0',
-      },
-    }).then((result) => {
+      const rl = readline.createInterface({ input: proc.stdout });
+      rl.on('line', (line) => {
+        if (this.proc === proc) this.handleLine(line);
+      });
+
+      const result = await this.request('initialize', {
+        clientInfo: {
+          name: 'codex_control',
+          title: 'Codex Control',
+          version: '0.1.0',
+        },
+      }, 15000, { skipReady: true, allowRetry: false });
       this.notify('initialized', {});
       this.info = result;
       this.codexHome = result?.codexHome ?? null;
       this.watchCodexHome(result.codexHome);
       return result;
+    })().finally(() => {
+      this.startInProgress = null;
     });
+    this.ready = this.startInProgress;
+    return this.startInProgress;
   }
 
   handleLine(line) {
@@ -140,16 +171,125 @@ class CodexAppServer {
     return external ? { ...enriched, status: external } : enriched;
   }
 
-  request(method, params = {}, timeoutMs = 15000) {
+  isProcessRunning(proc) {
+    return Boolean(proc && proc.exitCode === null && proc.signalCode === null);
+  }
+
+  waitForProcessExit(proc, timeoutMs = 800) {
+    if (!this.isProcessRunning(proc)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(resolve, timeoutMs);
+      proc.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+
+  async restartCodex() {
+    if (this.restartInProgress) return this.restartInProgress;
+    this.restartInProgress = (async () => {
+      const now = Date.now();
+      if (now - this.lastRestartAt < 250) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      this.lastRestartAt = Date.now();
+
+      if (this.isProcessRunning(this.proc)) {
+        const proc = this.proc;
+        this.isManualShutdown = true;
+        try {
+          proc.kill();
+        } catch (error) {
+          console.warn('[codex-control] failed to stop existing codex process:', error.message);
+        }
+        await this.waitForProcessExit(proc);
+        if (this.isProcessRunning(proc)) {
+          try {
+            proc.kill('SIGKILL');
+          } catch (error) {
+            console.warn('[codex-control] failed to force-stop codex process:', error.message);
+          }
+          await this.waitForProcessExit(proc);
+        }
+        this.isManualShutdown = false;
+      }
+
+      this.ready = this.start();
+      return await this.ready;
+    })();
+    this.ready = this.restartInProgress;
+
+    try {
+      await this.restartInProgress;
+    } finally {
+      this.restartInProgress = null;
+    }
+  }
+
+  isRecoverableCodexError(error) {
+    const message = String(error?.message ?? '').toLowerCase();
+    const code = String(error?.code ?? '').toLowerCase();
+    return code === 'epipe'
+      || code === 'err_stream_destroyed'
+      || message.includes('codex app-server exited')
+      || message.includes('codex app-server process error')
+      || message.includes('broken pipe')
+      || message.includes('write after end')
+      || message.includes('stream has been destroyed')
+      || message.includes('cannot call write');
+  }
+
+  async request(method, params = {}, timeoutMs = 15000, options = {}) {
+    const { allowRetry = true, skipReady = false } = options;
+    if (!skipReady) {
+      try {
+        await this.ready;
+      } catch (error) {
+        if (!allowRetry || !this.isRecoverableCodexError(error)) throw error;
+        await this.restartCodex();
+        return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
+      }
+    }
+
     const id = this.nextId++;
     const payload = { id, method, params };
-    this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
-    return new Promise((resolve, reject) => {
+    const requestPromise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
+    });
+
+    try {
+      if (!this.proc?.stdin?.writable || this.proc.stdin.destroyed) {
+        throw new Error('codex app-server stdin is not writable');
+      }
+      this.proc.stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+        if (!error || !this.pending.has(id)) return;
+        const pending = this.pending.get(id);
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        pending.reject(error);
+      });
+    } catch (error) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+      }
+      if (!allowRetry || !this.isRecoverableCodexError(error)) throw error;
+      await this.restartCodex();
+      return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
+    }
+
+    return requestPromise.catch(async (error) => {
+      if (!allowRetry || !this.isRecoverableCodexError(error)) {
+        throw error;
+      }
+      await this.restartCodex();
+      return this.request(method, params, timeoutMs, { ...options, allowRetry: false });
     });
   }
 
@@ -170,7 +310,7 @@ class CodexAppServer {
       if (String(searchTerm ?? '').trim()) params.searchTerm = String(searchTerm).trim();
       if (String(cwd ?? '').trim()) params.cwd = String(cwd).trim();
       if (cursor) params.cursor = cursor;
-      const result = await this.request('thread/list', params);
+      const result = await this.request('thread/list', params, 15000, { allowRetry: true });
       data.push(...(result.data ?? []));
       cursor = result.nextCursor;
       if (!cursor || !(result.data ?? []).length) break;
@@ -181,10 +321,10 @@ class CodexAppServer {
 
   async readThread(threadId) {
     await this.ready;
-    const read = await this.request('thread/read', { threadId });
+    const read = await this.request('thread/read', { threadId }, 15000, { allowRetry: true });
     let turns = { data: [] };
     try {
-      turns = await this.request('thread/turns/list', { threadId });
+      turns = await this.request('thread/turns/list', { threadId }, 15000, { allowRetry: true });
     } catch (error) {
       if (!isTurnsNotReadyError(error)) throw error;
     }
@@ -234,7 +374,7 @@ class CodexAppServer {
 
   async startThread(cwd, overrides = {}) {
     await this.ready;
-    const result = await this.request('thread/start', { cwd }, 30000);
+    const result = await this.request('thread/start', { cwd }, 30000, { allowRetry: false });
     if (result.thread) {
       this.rememberStatus('thread/started', { thread: result.thread });
       this.rememberPermissionSettings(result.thread.id, overrides);
@@ -244,7 +384,7 @@ class CodexAppServer {
 
   async resumeThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/resume', { threadId }, 30000);
+    const result = await this.request('thread/resume', { threadId }, 30000, { allowRetry: false });
     if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
@@ -267,7 +407,7 @@ class CodexAppServer {
     }
 
     this.rememberPermissionSettings(threadId, overrides);
-    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000);
+    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
     if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
@@ -285,7 +425,7 @@ class CodexAppServer {
       return { threadId, status: 'idle', stale: true };
     }
     try {
-      const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000);
+      const result = await this.request('turn/steer', { threadId, expectedTurnId: turnId, input }, 15000, { allowRetry: false });
       const text = textFromContent(input);
       if (text) {
         const key = String(threadId);
@@ -306,7 +446,7 @@ class CodexAppServer {
 
   async setThreadName(threadId, name) {
     await this.ready;
-    const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000);
+    const result = await this.request('thread/name/set', { threadId, name: String(name ?? '').trim() || null }, 15000, { allowRetry: false });
     this.rememberEvent('thread/name/set', { threadId, name });
     this.broadcast('codex-notification', { method: 'thread/name/set', params: { threadId, name } });
     this.scheduleThreadsChanged({ source: 'thread/name/set', threadId });
@@ -315,7 +455,7 @@ class CodexAppServer {
 
   async archiveThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/archive', { threadId }, 15000);
+    const result = await this.request('thread/archive', { threadId }, 15000, { allowRetry: false });
     this.rememberEvent('thread/archive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/archive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/archive', threadId });
@@ -324,7 +464,7 @@ class CodexAppServer {
 
   async unarchiveThread(threadId) {
     await this.ready;
-    const result = await this.request('thread/unarchive', { threadId }, 15000);
+    const result = await this.request('thread/unarchive', { threadId }, 15000, { allowRetry: false });
     this.rememberEvent('thread/unarchive', { threadId });
     this.broadcast('codex-notification', { method: 'thread/unarchive', params: { threadId } });
     this.scheduleThreadsChanged({ source: 'thread/unarchive', threadId });
@@ -351,7 +491,7 @@ class CodexAppServer {
       return { threadId, status: 'idle', stale: true };
     }
     try {
-      const result = await this.request('turn/interrupt', { threadId, turnId }, 15000);
+      const result = await this.request('turn/interrupt', { threadId, turnId }, 15000, { allowRetry: false });
       this.activeTurnByThread.delete(String(threadId));
       this.rememberStatus('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
       this.rememberEvent('turn/interrupted', { threadId, turnId, status: { type: 'idle' } });
@@ -504,7 +644,7 @@ class CodexAppServer {
   async activeTurnId(threadId) {
     const remembered = this.activeTurnByThread.get(String(threadId));
     if (remembered) return remembered;
-    const turns = await this.request('thread/turns/list', { threadId }, 15000);
+    const turns = await this.request('thread/turns/list', { threadId }, 15000, { allowRetry: true });
     const active = (turns.data ?? []).find((turn) => isActiveTurnStatus(turn.status));
     if (active?.id) {
       this.activeTurnByThread.set(String(threadId), String(active.id));
@@ -1722,6 +1862,16 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/runtime' && req.method === 'GET') {
       sendJson(res, 200, await runtimeDiagnostics());
+      return;
+    }
+
+    if (url.pathname === '/api/codex/restart' && req.method === 'POST') {
+      if (process.env.CODEX_CONTROL_DEV_RESTART !== '1') {
+        sendJson(res, 403, { error: 'Codex restart endpoint is disabled. Set CODEX_CONTROL_DEV_RESTART=1 to use it.' });
+        return;
+      }
+      await codex.restartCodex();
+      sendJson(res, 200, { ok: true, message: 'Codex app-server restart initiated.' });
       return;
     }
 
