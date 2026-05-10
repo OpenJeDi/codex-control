@@ -37,10 +37,15 @@ export function renderMarkdownMedia(src, label = '', embedded = false) {
 export function renderInlineMarkdown(text) {
   const codeSpans = [];
   const media = [];
-  let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
+  const pushCodeSpan = (code) => {
     const token = `@@CODE${codeSpans.length}@@`;
     codeSpans.push(`<code>${escapeHtml(code)}</code>`);
     return token;
+  };
+  let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
+    return pushCodeSpan(code);
+  }).replace(/<code>([\s\S]*?)<\/code>/gi, (_match, code) => {
+    return pushCodeSpan(code);
   }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
     const token = `@@MEDIA${media.length}@@`;
     media.push(renderMarkdownMedia(src, alt, true));

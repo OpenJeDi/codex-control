@@ -14,6 +14,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Configurable session workflow templates: repo/worktree-first remains the default local workflow, but the New Session dialog should eventually load workflow rules from config instead of hardcoding repo/worktree placement and branch naming.
 - Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
 - Richer live streaming / follow view.
+- Improve the development restart endpoint behavior: `/api/codex/restart` should respond quickly, restart asynchronously, and expose clear progress/health state so callers do not appear to hang.
 
 ## Live observability / status chrome
 
