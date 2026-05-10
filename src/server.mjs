@@ -395,6 +395,14 @@ class CodexAppServer {
     };
   }
 
+  async readThreadMetadata(threadId) {
+    await this.ready;
+    const read = await this.request('thread/read', { threadId }, 15000, { allowRetry: true });
+    const thread = await this.decorateThread(read.thread);
+    if (thread?.cwd) this.cwdByThread.set(String(threadId), thread.cwd);
+    return thread;
+  }
+
   async startThread(cwd = '', overrides = {}) {
     await this.ready;
     const params = String(cwd ?? '').trim() ? { cwd: String(cwd).trim() } : {};
@@ -1067,7 +1075,7 @@ async function worktreesForRepo(repoUrl) {
   const repo = String(repoUrl ?? '').trim();
   if (!repo) return { repo, worktrees: [], source: 'none' };
 
-  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  const threads = await hydrateThreadCwds(await codex.listThreads({ includeArchived: true, limit: 500 }));
   const threadsByCwd = await threadsByCwdMap(threads);
   const candidates = threads
     .filter((thread) => includes(`${thread.gitInfo?.originUrl ?? ''}\n${thread.cwd ?? ''}\n${thread.path ?? ''}`, repo))
@@ -1104,6 +1112,38 @@ async function worktreesForRepo(repoUrl) {
   return { repo, worktrees: [], source: 'not-found' };
 }
 
+async function hydrateThreadCwds(threads = []) {
+  return mapConcurrent(threads ?? [], 8, async (thread) => {
+    if (thread?.cwd || !thread?.id) return thread;
+    const remembered = codex.cwdByThread.get(String(thread.id));
+    if (remembered) return { ...thread, cwd: remembered };
+    try {
+      const hydrated = await codex.readThreadMetadata(thread.id);
+      return {
+        ...thread,
+        ...hydrated,
+        gitInfo: { ...(thread.gitInfo ?? {}), ...(hydrated?.gitInfo ?? {}) },
+      };
+    } catch {
+      return thread;
+    }
+  });
+}
+
+async function mapConcurrent(items = [], limit = 8, mapper) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function pathKey(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -1133,7 +1173,7 @@ async function threadsByCwdMap(threads = []) {
 async function existingThreadForCwd(cwd) {
   const key = await pathKey(cwd);
   if (!key) return null;
-  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  const threads = await hydrateThreadCwds(await codex.listThreads({ includeArchived: true, limit: 500 }));
   for (const thread of threads) {
     if (await pathKey(thread.cwd) === key) return thread;
   }
