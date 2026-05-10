@@ -515,7 +515,6 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [] }) {
         <div class="session-details">
           <div class="preview">${escapeHtml(thread.preview || '')}</div>
           <div class="kv">
-            <strong>ID</strong><span>${escapeHtml(thread.id)}</span>
             <strong>Status</strong><span>${escapeHtml(status)}</span>
             <strong>Model</strong><span>${escapeHtml(model || 'unknown')}</span>
             <strong>Model source</strong><span>${escapeHtml(modelSource)}</span>
@@ -571,7 +570,6 @@ function renderEventTimeline(events = []) {
       <time>${escapeHtml(fmtMillis(event.at))}</time>
       <span>${escapeHtml(event.message || event.method || 'Event')}</span>
       ${rowForModel(event)}
-      ${event.turnId ? `<code title="${escapeHtml(event.turnId)}">${escapeHtml(event.turnId.slice(0, 8))}</code>` : ''}
     </div>`;}).join('')}
   </section>`;
 }
@@ -706,7 +704,6 @@ function renderTurn(turn, index) {
       </div>
     </summary>
     <div class="turn-full">
-      <div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>
       ${turn.items.map(renderItem).join('')}
       ${(turn.steeredMessages ?? []).map(renderSteeredMessage).join('')}
       ${renderTurnBreak(turn)}
