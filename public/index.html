@@ -69,10 +69,17 @@
       <div class="modal-head">
         <div>
           <strong>New session</strong>
-          <p>Choose an existing worktree, or create a new lane worktree.</p>
+          <p>Create a Codex session. Attach it to a worktree for repo work, or leave it unattached for a chat-only lane.</p>
         </div>
         <button id="closeNewSession" type="button" title="Close">×</button>
       </div>
+
+      <label>
+        Session name
+        <input id="newSessionNameInput" name="sessionName" type="text" placeholder="plan total destruction updates" autocomplete="off">
+      </label>
+
+      <div class="modal-section-label">Workflow placement</div>
 
       <label>
         Repo
@@ -142,7 +149,7 @@
 
       <label>
         First prompt <span class="muted">optional</span>
-        <textarea name="prompt" rows="4" placeholder="Start this lane with..."></textarea>
+        <textarea name="prompt" rows="4" placeholder="Start this session with..."></textarea>
       </label>
 
       <label>
