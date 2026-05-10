@@ -15,6 +15,7 @@ const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
 const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
 const readOnlyMode = ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_READ_ONLY || '').trim().toLowerCase());
+const fileServingMode = normalizeFileServingMode(process.env.CODEX_CONTROL_FILE_SERVING || (process.env.CODEX_CONTROL_SERVE_SYSTEM_FILES ? 'system' : 'session'));
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
@@ -28,6 +29,7 @@ class CodexAppServer {
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
     this.permissionSettingsByThread = new Map();
+    this.cwdByThread = new Map();
     this.attachmentsByTurn = new Map();
     this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
@@ -366,11 +368,14 @@ class CodexAppServer {
     }
 
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
+    const permissionSettings = this.permissionSettingsByThread.get(key) ?? {};
+    const mediaPolicy = mediaPolicyForThread(resolvedThread, permissionSettings);
+    if (resolvedThread?.cwd) this.cwdByThread.set(key, resolvedThread.cwd);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd)),
-      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
-      permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
+      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), mediaPolicy)),
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map((message) => compactQueuedMessage(message, mediaPolicy)),
+      permissionSettings,
       events: this.eventsByThread.get(key) ?? [],
     };
   }
@@ -381,6 +386,7 @@ class CodexAppServer {
     if (result.thread) {
       this.rememberStatus('thread/started', { thread: result.thread });
       this.rememberPermissionSettings(result.thread.id, overrides);
+      if (result.thread.cwd) this.cwdByThread.set(String(result.thread.id), result.thread.cwd);
     }
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
@@ -389,6 +395,7 @@ class CodexAppServer {
     await this.ready;
     const result = await this.request('thread/resume', { threadId }, 30000, { allowRetry: false });
     if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
+    if (result.thread?.cwd) this.cwdByThread.set(String(threadId), result.thread.cwd);
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
@@ -412,12 +419,20 @@ class CodexAppServer {
     this.rememberPermissionSettings(threadId, overrides);
     const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
-    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
+    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input, this.mediaPolicyForThreadId(threadId)));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.broadcast('codex-notification', { method: 'turn/started', params: { threadId, turnId } });
     return result;
+  }
+
+  mediaPolicyForThreadId(threadId) {
+    const key = String(threadId);
+    return mediaPolicyForThread(
+      { id: key, cwd: this.cwdByThread.get(key) || '' },
+      this.permissionSettingsByThread.get(key) ?? {},
+    );
   }
 
   async steerTurn(threadId, input) {
@@ -569,14 +584,15 @@ class CodexAppServer {
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
-    return removed ? compactQueuedMessage(removed) : null;
+    return removed ? compactQueuedMessage(removed, this.mediaPolicyForThreadId(threadId)) : null;
   }
 
   moveQueuedMessage(threadId, turnId, direction) {
     const key = String(threadId);
     const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
     const index = current.findIndex((message) => String(message.turnId) === String(turnId));
-    if (index === -1) return current.map(compactQueuedMessage);
+    const mediaPolicy = this.mediaPolicyForThreadId(threadId);
+    if (index === -1) return current.map((message) => compactQueuedMessage(message, mediaPolicy));
     const delta = direction === 'down' ? 1 : -1;
     const target = Math.max(0, Math.min(current.length - 1, index + delta));
     if (target !== index) {
@@ -584,7 +600,7 @@ class CodexAppServer {
       current.splice(target, 0, message);
       this.queuedMessagesByThread.set(key, current);
     }
-    return current.map(compactQueuedMessage);
+    return current.map((message) => compactQueuedMessage(message, mediaPolicy));
   }
 
   async steerQueuedMessage(threadId, turnId) {
@@ -714,6 +730,11 @@ function isTurnsNotReadyError(error) {
 function isActiveTurnStatus(status) {
   const text = String(status ?? '').toLowerCase();
   return text === 'inprogress' || text === 'in_progress' || text === 'running';
+}
+
+function normalizeFileServingMode(value) {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return ['system', 'all', 'any'].includes(mode) ? 'system' : 'session';
 }
 
 const terminalRolloutEvents = new Set([
@@ -1039,7 +1060,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
+function compactTurn(turn, steeredMessages = [], attachments = [], mediaPolicy = {}) {
   return {
     id: turn.id,
     status: turn.status,
@@ -1050,15 +1071,15 @@ function compactTurn(turn, steeredMessages = [], attachments = [], cwd = '') {
     model: extractModelFromPayload(turn),
     effort: extractEffortFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, cwd)), attachments),
+    items: mergeTurnAttachments((turn.items ?? []).map((item) => compactItem(item, mediaPolicy)), attachments),
   };
 }
 
-function compactQueuedMessage(message) {
+function compactQueuedMessage(message, mediaPolicy = {}) {
   return {
     turnId: message.turnId,
     text: message.text,
-    attachments: attachmentsFromInput(message.input),
+    attachments: attachmentsFromInput(message.input, mediaPolicy),
     createdAt: message.createdAt,
   };
 }
@@ -1076,11 +1097,11 @@ function mergeTurnAttachments(items, attachments = []) {
   return next;
 }
 
-function attachmentsFromInput(input = []) {
+function attachmentsFromInput(input = [], mediaPolicy = {}) {
   return (Array.isArray(input) ? input : [])
     .filter((part) => part?.type === 'localImage' && part.path)
     .map((part) => {
-      const media = mediaFromLocalFilePath(part.path);
+      const media = mediaFromLocalFilePath(part.path, mediaPolicy);
       return media ? { type: 'image', ...media, filename: path.basename(part.path) } : null;
     })
     .filter(Boolean);
@@ -1260,23 +1281,52 @@ function mediaFromDataUrl(dataUrl) {
   return { type: 'image', src: `/api/media/${id}`, contentType };
 }
 
-function mediaFromLocalImagePath(filePath) {
+function mediaFromLocalImagePath(filePath, policy = {}) {
+  const media = mediaFromLocalFilePath(filePath, policy);
+  if (!media || !String(media.contentType).toLowerCase().startsWith('image/')) return null;
+  return { type: 'image', ...media };
+}
+
+function normalizeLocalFilePath(filePath) {
   const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  const ext = path.extname(target).toLowerCase();
-  const contentType = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-  }[ext];
-  if (!contentType) return null;
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target });
-  return { type: 'image', src: `/api/media/${id}`, contentType };
+  if (!target || target.includes('\0')) return '';
+  if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return path.win32.normalize(target);
+  if (path.isAbsolute(target)) return path.normalize(target);
+  return '';
+}
+
+function isWindowsPath(filePath) {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(String(filePath ?? ''));
+}
+
+function isPathInside(root, candidate) {
+  const normalizedRoot = normalizeLocalFilePath(root);
+  const normalizedCandidate = normalizeLocalFilePath(candidate);
+  if (!normalizedRoot || !normalizedCandidate) return false;
+  const pathApi = isWindowsPath(normalizedRoot) || isWindowsPath(normalizedCandidate) ? path.win32 : path;
+  const from = pathApi.normalize(normalizedRoot);
+  const to = pathApi.normalize(normalizedCandidate);
+  const relative = pathApi.relative(from, to);
+  return relative === '' || (!relative.startsWith('..') && !pathApi.isAbsolute(relative));
+}
+
+function mediaPolicyForThread(thread = {}, permissionSettings = {}) {
+  return {
+    threadId: thread?.id || '',
+    cwd: thread?.cwd || '',
+    sandboxPolicy: normalizeSandboxPolicyValue(permissionSettings?.sandboxPolicy) || 'workspaceWrite',
+  };
+}
+
+function canServeLocalFilePath(filePath, policy = {}) {
+  const target = normalizeLocalFilePath(filePath);
+  if (!target) return false;
+  if (!existsSync(target)) return false;
+  try { if (!statSync(target).isFile()) return false; } catch { return false; }
+  if (fileServingMode === 'system') return true;
+  const sandboxPolicy = normalizeSandboxPolicyValue(policy?.sandboxPolicy) || 'workspaceWrite';
+  if (sandboxPolicy === 'dangerFullAccess') return true;
+  return Boolean(policy?.cwd && isPathInside(policy.cwd, target));
 }
 
 function localFileContentType(filePath) {
@@ -1309,41 +1359,42 @@ function localFileContentType(filePath) {
   }[ext] ?? 'application/octet-stream';
 }
 
-function mediaFromLocalFilePath(filePath) {
-  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
-  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
-  if (!existsSync(target)) return null;
-  try { if (!statSync(target).isFile()) return null; } catch { return null; }
+function mediaFromLocalFilePath(filePath, policy = {}) {
+  const target = normalizeLocalFilePath(filePath);
+  if (!canServeLocalFilePath(target, policy)) return null;
   const contentType = localFileContentType(target);
-  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
-  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
+  const scope = fileServingMode === 'system'
+    ? 'system'
+    : (normalizeSandboxPolicyValue(policy?.sandboxPolicy) === 'dangerFullAccess' ? 'dangerFullAccess' : `workspace:${normalizeLocalFilePath(policy?.cwd)}`);
+  const id = createHash('sha256').update(`${scope}\n${target}`).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target), scope });
   return { src: `/api/media/${id}`, contentType, filename: path.basename(target) };
 }
 
-function rewriteMarkdownLocalFileLinks(text) {
+function rewriteMarkdownLocalFileLinks(text, policy = {}) {
   return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
     const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
+    const media = mediaFromLocalFilePath(target, policy);
     const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
     return media ? `![${alt}](${media.src}?kind=${kind})` : match;
   }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
     const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-    const media = mediaFromLocalFilePath(target);
+    const media = mediaFromLocalFilePath(target, policy);
     return media ? `[${label}](${media.src})` : match;
   });
 }
 
-function rewriteLocalFileReferences(text, cwd = '') {
+function rewriteLocalFileReferences(text, policy = {}) {
   return String(text ?? '').split(/(```[\s\S]*?```)/g).map((segment) => {
     if (segment.startsWith('```')) return segment;
-    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment), cwd), cwd);
+    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment, policy), policy), policy);
   }).join('');
 }
 
-function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
+function rewriteInlineCodeLocalFileLinks(text, policy = {}) {
   return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
     return media ? `[${rawPath}](${media.src})` : match;
   });
 }
@@ -1358,16 +1409,16 @@ function resolveMentionedFilePath(rawPath, cwd = '') {
   return existsSync(resolved) ? resolved : '';
 }
 
-function rewriteBareLocalFilePaths(text, cwd = '') {
+function rewriteBareLocalFilePaths(text, policy = {}) {
   const source = String(text ?? '');
   return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
-    const resolved = resolveMentionedFilePath(rawPath, cwd);
-    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
     return media ? `${prefix}[${rawPath}](${media.src})` : match;
   });
 }
 
-function compactContentParts(content) {
+function compactContentParts(content, mediaPolicy = {}) {
   if (!Array.isArray(content)) return [];
   return content.map((part) => {
     const type = String(part?.type ?? '').toLowerCase();
@@ -1380,7 +1431,7 @@ function compactContentParts(content) {
       return media ? { ...media, detail: part?.detail } : { type: 'unsupportedImage' };
     }
     if (type === 'localimage' || type === 'local_image') {
-      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path);
+      const media = mediaFromLocalFilePath(part?.path ?? part?.filePath ?? part?.file_path, mediaPolicy);
       return media ? { type: 'image', ...media, detail: part?.detail, filename: media.filename } : { type: 'unsupportedImage' };
     }
     return null;
@@ -1392,12 +1443,12 @@ function truncate(value, max = 12000) {
   return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
 }
 
-function compactItem(item, cwd = '') {
+function compactItem(item, mediaPolicy = {}) {
   const type = item.type ?? 'unknown';
   const base = { id: item.id, type };
 
-  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, cwd)) };
+  if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content, mediaPolicy) };
+  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteLocalFileReferences(item.text, mediaPolicy)) };
   if (type === 'commandExecution') {
     return {
       ...base,
@@ -1407,7 +1458,7 @@ function compactItem(item, cwd = '') {
       output: truncate(item.output ?? item.stdout ?? item.stderr ?? '', 8000),
     };
   }
-  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', cwd)) };
+  if (type === 'reasoning') return { ...base, text: truncate(rewriteLocalFileReferences(item.text ?? item.summary ?? '', mediaPolicy)) };
 
   const json = JSON.stringify(item, null, 2);
   return { ...base, text: truncate(json, 6000) };
@@ -1808,6 +1859,7 @@ async function runtimeDiagnostics() {
       host,
       port,
       readOnly: readOnlyMode,
+      fileServingMode,
       codexHome: codex.codexHome,
       node: process.version,
     },
@@ -1844,7 +1896,7 @@ async function appSettings() {
   }
   const config = normalizeConfigSettings(configResult?.config ?? configResult ?? {});
   const models = Array.isArray(modelResult?.data) ? modelResult.data.map(compactModelInfo).filter((model) => model.id) : [];
-  return { config, models, readOnly: readOnlyMode };
+  return { config, models, readOnly: readOnlyMode, fileServingMode };
 }
 
 function compactModelInfo(model = {}) {
@@ -1895,10 +1947,10 @@ function normalizeApprovalPolicyValue(value) {
 }
 
 function sendMediaPath(res, filePath) {
-  const media = mediaFromLocalFilePath(filePath);
+  const media = fileServingMode === 'system' ? mediaFromLocalFilePath(filePath, { sandboxPolicy: 'dangerFullAccess' }) : null;
   if (!media) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Not found');
+    res.writeHead(fileServingMode === 'system' ? 404 : 403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(fileServingMode === 'system' ? 'Not found' : 'System file serving is disabled.');
     return;
   }
   const id = String(media.src ?? '').split('/').pop();

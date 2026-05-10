@@ -68,7 +68,7 @@ const PERMISSION_PRESETS = [
   { id: 'trusted', label: 'trusted local', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'untrusted', networkAccess: false },
   { id: 'full', label: 'full autonomous', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'never', networkAccess: false },
 ];
-let appSettings = { config: {}, models: [], readOnly: false };
+let appSettings = { config: {}, models: [], readOnly: false, fileServingMode: 'session' };
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const truncate = (value, max = 12000) => {
@@ -900,9 +900,10 @@ async function loadSettings() {
       config: settings.config ?? {},
       models: Array.isArray(settings.models) ? settings.models : [],
       readOnly: Boolean(settings.readOnly),
+      fileServingMode: settings.fileServingMode || 'session',
     };
   } catch {
-    appSettings = { config: {}, models: [], readOnly: false };
+    appSettings = { config: {}, models: [], readOnly: false, fileServingMode: 'session' };
   }
   applyAccessMode();
 }
@@ -951,6 +952,7 @@ function renderRuntimeDiagnostics(data) {
       ])}
       ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
         ['Access mode', server.readOnly ? 'read only' : 'read/write'],
+        ['File serving', server.fileServingMode === 'system' ? 'system files' : 'session policy'],
         ['App root', server.rootDir || '-'],
         ['Codex home', server.codexHome || '-'],
         ['Node', server.node || '-'],
@@ -2047,21 +2049,7 @@ function renderMarkdownBlocks(text) {
 }
 
 function renderCodeBlockContent(code) {
-  const source = String(code ?? '');
-  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+)/g;
-  let html = '';
-  let lastIndex = 0;
-  for (const match of source.matchAll(pathPattern)) {
-    const rawMatch = match[1];
-    const start = match.index ?? 0;
-    const rawPath = rawMatch.replace(/[.,;:]+$/g, '');
-    const suffix = rawMatch.slice(rawPath.length);
-    html += escapeHtml(source.slice(lastIndex, start));
-    html += `<a class="code-file-link" href="/api/media/path?path=${encodeURIComponent(rawPath)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`;
-    lastIndex = start + rawMatch.length;
-  }
-  html += escapeHtml(source.slice(lastIndex));
-  return html;
+  return escapeHtml(code);
 }
 
 function renderMarkdownText(text) {

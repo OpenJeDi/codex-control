@@ -21,7 +21,9 @@ This file is for coding agents working in this repository. It is not user-facing
 - Preserve `CODEX_CONTROL_READ_ONLY=1` behavior when changing routes or UI controls.
 - Every new mutating API route must call the server-side write-access guard.
 - Every new write control in the UI must be hidden or disabled in read-only mode.
-- Treat local file/media serving as sensitive when the app is reachable beyond loopback.
+- Local file/media serving must follow session permission policy by default.
+- Do not create direct `/api/media/path` links from the client unless they are covered by an explicit server-side policy check.
+- Treat `CODEX_CONTROL_FILE_SERVING=system` as a deliberate unsafe/trusted-machine mode.
 
 ## Working Style
 
