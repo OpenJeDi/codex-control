@@ -277,7 +277,7 @@ body.sidebar-collapsed .splitter { display: none; }
 .compact-item pre { margin-top: 10px; max-height: 420px; overflow: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .session-image { margin: 10px 0 0; display: grid; gap: 6px; }
-.session-image img { max-width: min(100%, 760px); max-height: 520px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); object-fit: contain; }
+.session-image img { max-width: min(100%, 760px); max-height: 520px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); object-fit: contain; cursor: zoom-in; }
 .session-video video { max-width: min(100%, 760px); max-height: 520px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); }
 .session-image figcaption, .unsupported-media { color: var(--muted); font-size: 11px; }
 .attachment-preview {
@@ -522,6 +522,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   border: 1px solid rgba(255, 184, 108, 0.35);
   border-radius: 7px;
   background: rgba(0,0,0,0.24);
+  cursor: zoom-in;
 }
 .prompt-bar { display: grid; gap: 8px; align-content: end; }
 .prompt-bar textarea, .modal textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid var(--line); border-radius: 12px; background: #141619; color: var(--text); padding: 10px; font: inherit; }
@@ -601,6 +602,45 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .modal-card label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
 .modal-actions { display: grid; grid-template-columns: auto 1fr auto auto; }
 .modal-actions span { min-width: 0; }
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  background: rgba(0,0,0,0.86);
+}
+.image-lightbox[hidden] { display: none; }
+.lightbox-stage {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: zoom-out;
+}
+.lightbox-stage img {
+  max-width: 92vw;
+  max-height: 84vh;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+  transform-origin: center;
+  will-change: transform;
+}
+.lightbox-stage img:active { cursor: grabbing; }
+.lightbox-toolbar {
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  background: rgba(20,22,25,0.9);
+  box-shadow: 0 18px 46px rgba(0,0,0,0.45);
+}
+.lightbox-toolbar button { padding: 6px 10px; }
 .runtime-modal { width: min(980px, calc(100vw - 32px)); }
 .runtime-card-shell { max-height: min(760px, calc(100vh - 48px)); overflow: auto; }
 .runtime-content { display: grid; gap: 12px; }

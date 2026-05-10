@@ -14,6 +14,8 @@ const runtimeButton = document.querySelector('#runtimeButton');
 const runtimeDialog = document.querySelector('#runtimeDialog');
 const runtimeContent = document.querySelector('#runtimeContent');
 const closeRuntime = document.querySelector('#closeRuntime');
+const imageLightbox = document.querySelector('#imageLightbox');
+const lightboxImage = document.querySelector('#lightboxImage');
 const newSessionDialog = document.querySelector('#newSessionDialog');
 const newSessionForm = document.querySelector('#newSessionForm');
 const newRepoSelect = document.querySelector('#newRepoSelect');
@@ -26,6 +28,7 @@ let activeId = null;
 let debounceTimer = null;
 let detailRefreshTimer = null;
 let isDraggingSidebar = false;
+let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
@@ -625,6 +628,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     bindQueuedMessageControls(id);
     restoreOpenTurnDetails(openTurnDetails);
     bindCodeCopyControls();
+    bindSessionImageViewer();
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
@@ -1281,6 +1285,86 @@ function bindCodeCopyControls() {
   });
 }
 
+function bindSessionImageViewer() {
+  detailEl.querySelectorAll('.session-image img, .queued-attachments img').forEach((image) => {
+    image.addEventListener('click', () => openImageLightbox(image.src, image.alt || 'Session image'));
+  });
+}
+
+function openImageLightbox(src, alt = '') {
+  lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+  lightboxImage.src = src;
+  lightboxImage.alt = alt;
+  imageLightbox.hidden = false;
+  updateLightboxTransform();
+}
+
+function closeImageLightbox() {
+  imageLightbox.hidden = true;
+  lightboxImage.removeAttribute('src');
+}
+
+function updateLightboxTransform() {
+  lightboxImage.style.transform = `translate(${lightboxState.x}px, ${lightboxState.y}px) scale(${lightboxState.scale})`;
+}
+
+function zoomLightbox(delta, origin = { x: 0, y: 0 }) {
+  const previous = lightboxState.scale;
+  const next = Math.min(8, Math.max(0.25, previous * delta));
+  if (next === previous) return;
+  lightboxState.x = origin.x - ((origin.x - lightboxState.x) * next / previous);
+  lightboxState.y = origin.y - ((origin.y - lightboxState.y) * next / previous);
+  lightboxState.scale = next;
+  updateLightboxTransform();
+}
+
+function resetLightbox() {
+  lightboxState.scale = 1;
+  lightboxState.x = 0;
+  lightboxState.y = 0;
+  updateLightboxTransform();
+}
+
+function bindImageLightbox() {
+  imageLightbox.addEventListener('click', (event) => {
+    const action = event.target?.dataset?.action;
+    if (action === 'close-lightbox') closeImageLightbox();
+    if (action === 'zoom-in') zoomLightbox(1.25);
+    if (action === 'zoom-out') zoomLightbox(0.8);
+    if (action === 'zoom-reset') resetLightbox();
+  });
+  imageLightbox.addEventListener('wheel', (event) => {
+    if (imageLightbox.hidden) return;
+    event.preventDefault();
+    const rect = lightboxImage.getBoundingClientRect();
+    zoomLightbox(event.deltaY < 0 ? 1.12 : 0.89, {
+      x: event.clientX - rect.left - rect.width / 2,
+      y: event.clientY - rect.top - rect.height / 2,
+    });
+  }, { passive: false });
+  lightboxImage.addEventListener('pointerdown', (event) => {
+    lightboxState.dragging = true;
+    lightboxState.startX = event.clientX;
+    lightboxState.startY = event.clientY;
+    lightboxState.originX = lightboxState.x;
+    lightboxState.originY = lightboxState.y;
+    lightboxImage.setPointerCapture(event.pointerId);
+  });
+  lightboxImage.addEventListener('pointermove', (event) => {
+    if (!lightboxState.dragging) return;
+    lightboxState.x = lightboxState.originX + event.clientX - lightboxState.startX;
+    lightboxState.y = lightboxState.originY + event.clientY - lightboxState.startY;
+    updateLightboxTransform();
+  });
+  lightboxImage.addEventListener('pointerup', () => {
+    lightboxState.dragging = false;
+  });
+  lightboxImage.addEventListener('dblclick', resetLightbox);
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !imageLightbox.hidden) closeImageLightbox();
+  });
+}
+
 function shouldRenderMarkdown(item) {
   return item.type === 'userMessage' || item.type === 'agentMessage' || item.type === 'reasoning';
 }
@@ -1434,6 +1518,7 @@ splitter.addEventListener('pointerup', () => {
   document.body.classList.remove('resizing-sidebar');
 });
 applySavedLayout();
+bindImageLightbox();
 connectEvents();
 setInterval(refreshAgeIndicators, 30 * 1000);
 await loadHealth();

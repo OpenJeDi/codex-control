@@ -135,6 +135,18 @@
     </form>
   </dialog>
 
+  <div id="imageLightbox" class="image-lightbox" hidden>
+    <div class="lightbox-stage" data-action="close-lightbox">
+      <img id="lightboxImage" alt="">
+    </div>
+    <div class="lightbox-toolbar">
+      <button type="button" data-action="zoom-out">-</button>
+      <button type="button" data-action="zoom-reset">Reset</button>
+      <button type="button" data-action="zoom-in">+</button>
+      <button type="button" data-action="close-lightbox">Close</button>
+    </div>
+  </div>
+
   <p id="status" class="sr-only" aria-live="polite">Connecting to Codex...</p>
   <script type="module" src="/app.js"></script>
 </body>
