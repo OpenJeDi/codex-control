@@ -817,7 +817,7 @@ function updateSettingSource(dot, explicit) {
 function normalizeRepoInput(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
-  if (/^[^\s/]+\/[^\s/]+$/.test(text) && !text.includes(':')) return `git@github.com:${text.replace(/\.git$/, '')}.git`;
+  if (!/^(https?:\/\/|git@|ssh:\/\/)/i.test(text) && /^[^\s/]+\/[^\s/]+$/.test(text) && !text.includes(':')) return `git@github.com:${text.replace(/\.git$/, '')}.git`;
   return text;
 }
 

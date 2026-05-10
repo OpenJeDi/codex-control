@@ -172,10 +172,11 @@
         Repository
         <input id="repoUrlInput" name="repo" type="text" placeholder="OpenJeDi/codex-control" autocomplete="off">
       </label>
+      <p class="hint">For now this only adds the repo to this browser's picker. Create or clone the repository and its worktree structure yourself first; Codex Control will discover matching local worktrees from existing sessions or known lanes.</p>
 
       <div class="plan-summary">
         <div><strong>Display</strong><span id="repoDisplayPreview">-</span></div>
-        <div><strong>Stored value</strong><span id="repoValuePreview">-</span></div>
+        <div><strong>Resolved Git URL</strong><span id="repoValuePreview">-</span></div>
       </div>
 
       <div id="repoError" class="hint error-text"></div>
