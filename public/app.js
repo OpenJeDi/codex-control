@@ -984,6 +984,7 @@ function renderRuntimeDiagnostics(data) {
   const access = data.access ?? {};
   const git = data.git ?? {};
   const server = data.server ?? {};
+  const auth = server.auth ?? {};
   const commands = data.commands ?? {};
   const gitStatus = String(git.status ?? '').trim();
   const canChangePermissions = Boolean(access.currentSessionCanChangePermissions);
@@ -1006,6 +1007,7 @@ function renderRuntimeDiagnostics(data) {
     <section class="runtime-section">
       <dl class="runtime-basics">
         <dt>Server</dt><dd>${escapeHtml(serverReadOnly ? 'read only' : 'read/write')} at ${escapeHtml(`${server.host || '127.0.0.1'}:${server.port || ''}`)}</dd>
+        <dt>Authentication</dt><dd>${escapeHtml(auth.enabled ? `basic (${auth.user || 'configured user'})` : (auth.networkWarning ? 'disabled - network exposure warning' : 'disabled'))}</dd>
         <dt>File serving</dt><dd>${escapeHtml(server.fileServingMode === 'system' ? 'system files' : 'session policy')}</dd>
         <dt>Worktree</dt><dd>${escapeHtml(git.worktreeRoot || '-')}</dd>
         <dt>Commit access</dt><dd>${escapeHtml(canCommit ? 'ready' : 'blocked')}</dd>

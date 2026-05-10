@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream, readFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -19,6 +19,7 @@ const host = process.env.HOST || '127.0.0.1';
 const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
 const readOnlyMode = ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_READ_ONLY || '').trim().toLowerCase());
 const fileServingMode = normalizeFileServingMode(process.env.CODEX_CONTROL_FILE_SERVING || (process.env.CODEX_CONTROL_SERVE_SYSTEM_FILES ? 'system' : 'session'));
+const authSettings = normalizeAuthSettings();
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
@@ -1751,6 +1752,70 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+function normalizeAuthSettings() {
+  const mode = String(process.env.CODEX_CONTROL_AUTH || 'none').trim().toLowerCase();
+  const normalizedMode = mode === 'basic' ? 'basic' : 'none';
+  return {
+    mode: normalizedMode,
+    user: String(process.env.CODEX_CONTROL_AUTH_USER || 'admin'),
+    password: String(process.env.CODEX_CONTROL_AUTH_PASSWORD || ''),
+    passwordSha256: String(process.env.CODEX_CONTROL_AUTH_PASSWORD_SHA256 || '').trim().toLowerCase(),
+    allowUnauthenticatedNetwork: ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_ALLOW_UNAUTHENTICATED_NETWORK || '').trim().toLowerCase()),
+  };
+}
+
+function isLoopbackHost(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  return !text || text === 'localhost' || text === '127.0.0.1' || text === '::1';
+}
+
+function safeEqualText(left, right) {
+  const leftBuffer = Buffer.from(String(left ?? ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right ?? ''), 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function verifyAuthPassword(password) {
+  if (authSettings.password && safeEqualText(password, authSettings.password)) return true;
+  if (!authSettings.passwordSha256) return false;
+  const hash = createHash('sha256').update(String(password ?? ''), 'utf8').digest('hex');
+  return safeEqualText(hash, authSettings.passwordSha256);
+}
+
+function rejectAuth(res) {
+  res.writeHead(401, {
+    'www-authenticate': 'Basic realm="Codex Control"',
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end('Authentication required');
+  return false;
+}
+
+function requireAuth(req, res) {
+  if (authSettings.mode !== 'basic') return true;
+  if (!authSettings.password && !authSettings.passwordSha256) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('Basic auth is enabled but no password or password hash is configured.');
+    return false;
+  }
+  const header = String(req.headers.authorization || '');
+  const match = header.match(/^Basic\s+(.+)$/i);
+  if (!match) return rejectAuth(res);
+  let decoded = '';
+  try {
+    decoded = Buffer.from(match[1], 'base64').toString('utf8');
+  } catch {
+    return rejectAuth(res);
+  }
+  const separator = decoded.indexOf(':');
+  if (separator === -1) return rejectAuth(res);
+  const user = decoded.slice(0, separator);
+  const password = decoded.slice(separator + 1);
+  return safeEqualText(user, authSettings.user) && verifyAuthPassword(password) ? true : rejectAuth(res);
+}
+
 function requireWriteAccess() {
   if (readOnlyMode) throw Object.assign(new Error('Codex Control is running in read-only mode.'), { statusCode: 403 });
 }
@@ -1825,6 +1890,13 @@ async function runtimeDiagnostics() {
       port,
       readOnly: readOnlyMode,
       fileServingMode,
+      auth: {
+        mode: authSettings.mode,
+        enabled: authSettings.mode === 'basic',
+        user: authSettings.mode === 'basic' ? authSettings.user : '',
+        passwordConfigured: Boolean(authSettings.password || authSettings.passwordSha256),
+        networkWarning: !isLoopbackHost(host) && authSettings.mode === 'none' && !authSettings.allowUnauthenticatedNetwork,
+      },
       codexHome: codex.codexHome,
       node: process.version,
     },
@@ -1971,6 +2043,8 @@ const server = createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, ...info });
       return;
     }
+
+    if (!requireAuth(req, res)) return;
 
     if (url.pathname === '/api/runtime' && req.method === 'GET') {
       sendJson(res, 200, await runtimeDiagnostics());
