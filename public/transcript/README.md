@@ -9,6 +9,7 @@ The server still owns filesystem-aware normalization in `src/transcript/`. Anyth
 - `registry.js`: registers item parsers and block parsers, then creates render functions for `public/app.js`.
 - `rendering.js`: shared HTML, Markdown, media, code-block, content-part, and DOM binding helpers.
 - `parsers/`: focused parser modules, one transcript item or block shape per file.
+- `utils/`: low-level browser-safe utilities used by renderers.
 
 ## Rendering Layers
 
@@ -155,7 +156,7 @@ Keep this boundary intact:
 - Client parsers: choose markup for already-normalized item/block shapes.
 - `public/app.js`: orchestrate transcript rendering, detail refresh, lightbox state, copy-button binding, and other page-level behavior.
 
-If a parser needs a helper that should be shared, add it to `rendering.js` and include it in `createTranscriptRenderContext()`.
+If a parser needs a helper that should be shared, add rendering-level helpers to `rendering.js` and include them in `createTranscriptRenderContext()`. Put lower-level reusable helpers, such as escaping or media classification, under `utils/`.
 
 ## Verification
 

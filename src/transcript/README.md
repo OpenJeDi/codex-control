@@ -9,6 +9,7 @@ The browser can render normalized transcript items and blocks, but it cannot res
 - `normalize.js`: normalizes Codex turns and items into stable client-facing transcript shapes.
 - `media.js`: resolves local files, data URLs, and local path mentions into `/api/media/:id` URLs.
 - `parsers/`: focused normalizers for raw Codex item/block shapes.
+- `utils/`: low-level text and content-type utilities used by normalizers.
 
 ## Normalization Flow
 
@@ -73,6 +74,7 @@ Normalizer modules receive a context object with:
 - Include raw JSON behind a disclosure when it helps debugging, but truncate it.
 - Return `null` from a normalizer when the item does not produce useful render blocks.
 - Do not emit HTML from server normalizers; emit structured data for the client parser layer.
+- Put low-level reusable helpers under `utils/`; keep `normalize.js` focused on orchestration and default item shapes.
 
 ## Verification
 

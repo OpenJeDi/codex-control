@@ -1,18 +1,4 @@
-import path from 'node:path';
-
-function imageGenerationContentTypeFromSource(source) {
-  const clean = String(source ?? '').split('?')[0].toLowerCase();
-  const ext = path.extname(clean).replace('.', '');
-  return {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    bmp: 'image/bmp',
-    svg: 'image/svg+xml',
-  }[ext] || null;
-}
+import { imageContentTypeFromSource } from '../utils/contentTypes.js';
 
 function mediaFromImageGenerationSource(candidate, context = {}) {
   const candidateText = String(candidate ?? '').trim();
@@ -33,7 +19,7 @@ function mediaFromImageGenerationSource(candidate, context = {}) {
     return {
       type: 'image',
       src: candidateText,
-      contentType: imageGenerationContentTypeFromSource(candidateText) || 'image/png',
+      contentType: imageContentTypeFromSource(candidateText) || 'image/png',
     };
   }
 

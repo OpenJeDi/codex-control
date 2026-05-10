@@ -1,22 +1,11 @@
 import { imageGenerationNormalizer } from './parsers/imageGeneration.js';
+import { textFromContent, truncate } from './utils/text.js';
+
+export { textFromContent, truncate } from './utils/text.js';
 
 const blockNormalizers = [
   imageGenerationNormalizer,
 ];
-
-export function truncate(value, max = 12000) {
-  const text = String(value ?? '');
-  return text.length > max ? text.slice(0, max) + "\n... truncated ..." : text;
-}
-
-export function textFromContent(content) {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((part) => part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value)
-    .map((part) => part?.text ?? part?.value ?? '')
-    .filter(Boolean)
-    .join('\n');
-}
 
 function normalizeItemContentParts(content, context = {}) {
   if (!Array.isArray(content)) return [];
