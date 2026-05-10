@@ -6,11 +6,11 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Show instruction sources and system-prompt-ish context.
 - Editable developer instructions for new sessions.
 - Codex config read/write with diff + confirm.
-- Model/provider/reasoning/sandbox defaults.
+- Model/provider/reasoning/sandbox defaults, including durable permission defaults that survive Codex Control server restarts.
 - Account and rate-limit visibility.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
-- Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop is implemented for active turns.
+- Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
 - Richer live streaming / follow view.
 
 ## Live observability / status chrome
@@ -27,14 +27,15 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Remaining: make that model label interactive by opening a dropdown to switch model/provider for the current session.
 - The model picker should use Codex model/provider capability data where available and make the current session override clear versus global defaults.
 
-## Prompt queue, steering, and interruption UX
+## Prompt queue, steering, interruption, and approval UX
 
 Status: core behavior implemented in the session-interaction branch; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
 
 - Implemented: when a turn is active, normal Send queues the message for after the agent finishes and shows the queued message above the prompt bar.
 - Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
-- Implemented: clear Stop action interrupts the active turn with verified `turn/interrupt` params and renders a stopped break line.
+- Implemented: clear Stop action interrupts the active turn with verified `turn/interrupt` params, renders a stopped break line, and clears stale local busy state when app-server has no active turn.
 - Follow-up polish: persist queued-message annotations across app restarts if this proves necessary.
+- Follow-up: add approval request UX for app-server command/file/tool approval prompts and send decisions back to app-server before relying on prompt-capable approval policies.
 - Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
 - Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
 
@@ -69,6 +70,6 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 ## Transcript rendering polish
 
 - Improve the basic safe Markdown renderer: richer tables/blockquotes/task lists if they become useful, without making command/raw payload rendering noisy.
-- Improve existing session image rendering polish later: captions, sizing, multiple-image layout, and non-data image sources. Basic Codex structured image parts now render; this remains separate from Markdown rendering.
+- Improve existing session image rendering polish later: captions, sizing, and multiple-image layout. Basic Codex structured image parts, Markdown local image/video links, and absolute local file links now render/link through media endpoints.
 - Keep commands, file changes, raw JSON, and large/noisy payloads collapsible in monospace.
 - Preserve inspectability while making normal Codex replies pleasant to read.
