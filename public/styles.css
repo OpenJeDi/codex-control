@@ -619,8 +619,34 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .modal-permissions {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
 }
 .modal-permissions select { width: 100%; max-width: none; }
+.modal-permissions .permission-advanced {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.modal-permissions .permission-advanced summary {
+  width: max-content;
+  min-width: 110px;
+}
+.modal-permissions .permission-advanced[open] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.018);
+}
+.modal-permissions .permission-advanced[open] summary {
+  grid-column: auto;
+}
+.modal-permissions .permission-advanced[open] select {
+  width: 100%;
+  max-width: none;
+}
 .modal-model-controls {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
@@ -687,7 +713,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
   margin: 0;
   width: 210px;
 }
-.prompt-actions .permission-advanced[open] select:nth-of-type(1) { top: 42px; }
 .prompt-actions .permission-advanced[open] select:nth-of-type(1) { bottom: 90px; top: auto; }
 .prompt-actions .permission-advanced[open] select:nth-of-type(2) { bottom: 50px; top: auto; }
 .prompt-actions .permission-advanced[open] summary {
