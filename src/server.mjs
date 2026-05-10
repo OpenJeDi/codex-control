@@ -14,6 +14,7 @@ const publicDir = path.join(rootDir, 'public');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
 const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
+const readOnlyMode = ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_READ_ONLY || '').trim().toLowerCase());
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
@@ -1734,6 +1735,10 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+function requireWriteAccess() {
+  if (readOnlyMode) throw Object.assign(new Error('Codex Control is running in read-only mode.'), { statusCode: 403 });
+}
+
 async function probeDirectoryWrite(dir) {
   const targetDir = String(dir ?? '').trim();
   if (!targetDir) return { canWrite: false, reason: 'No directory available.' };
@@ -1802,6 +1807,7 @@ async function runtimeDiagnostics() {
       publicDir,
       host,
       port,
+      readOnly: readOnlyMode,
       codexHome: codex.codexHome,
       node: process.version,
     },
@@ -1812,8 +1818,10 @@ async function runtimeDiagnostics() {
       canCommit,
       recommendedWritableRoot,
       currentSessionCanChangePermissions: false,
-      permissionMutationSupported: true,
-      permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
+      permissionMutationSupported: !readOnlyMode,
+      permissionMutationReason: readOnlyMode
+        ? 'Codex Control is running in read-only mode. Turn, session, and worktree mutations are disabled.'
+        : 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
     },
     commands: {
       restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-codex-control.ps1${restartTaskName ? ` -TaskName ${quotePowerShellSingle(restartTaskName)}` : ''}`,
@@ -1823,14 +1831,20 @@ async function runtimeDiagnostics() {
 }
 
 async function appSettings() {
-  await codex.ready;
-  const [configResult, modelResult] = await Promise.all([
-    codex.request('config/read', { includeLayers: false }).catch(() => ({})),
-    codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
-  ]);
+  let configResult = {};
+  let modelResult = { data: [] };
+  try {
+    await codex.ready;
+    [configResult, modelResult] = await Promise.all([
+      codex.request('config/read', { includeLayers: false }).catch(() => ({})),
+      codex.request('model/list', { limit: 100, includeHidden: false }).catch(() => ({ data: [] })),
+    ]);
+  } catch {
+    // Keep static app settings available even when the child app-server is restarting.
+  }
   const config = normalizeConfigSettings(configResult?.config ?? configResult ?? {});
   const models = Array.isArray(modelResult?.data) ? modelResult.data.map(compactModelInfo).filter((model) => model.id) : [];
-  return { config, models };
+  return { config, models, readOnly: readOnlyMode };
 }
 
 function compactModelInfo(model = {}) {
@@ -1952,6 +1966,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/codex/restart' && req.method === 'POST') {
+      requireWriteAccess();
       if (process.env.CODEX_CONTROL_DEV_RESTART !== '1') {
         sendJson(res, 403, { error: 'Codex restart endpoint is disabled. Set CODEX_CONTROL_DEV_RESTART=1 to use it.' });
         return;
@@ -1989,11 +2004,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/worktree-plan' && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await buildWorktreePlan(await readJson(req)));
       return;
     }
 
     if (url.pathname === '/api/worktrees' && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await createWorktree(await readJson(req)));
       return;
     }
@@ -2005,6 +2022,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/threads' && req.method === 'POST') {
+      requireWriteAccess();
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
       if (!cwd) throw new Error('Choose a worktree first.');
@@ -2021,6 +2039,7 @@ const server = createServer(async (req, res) => {
 
     const nameMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/name$/);
     if (nameMatch && req.method === 'POST') {
+      requireWriteAccess();
       const body = await readJson(req);
       sendJson(res, 200, await codex.setThreadName(decodeURIComponent(nameMatch[1]), body.name));
       return;
@@ -2028,18 +2047,21 @@ const server = createServer(async (req, res) => {
 
     const archiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/archive$/);
     if (archiveMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.archiveThread(decodeURIComponent(archiveMatch[1])));
       return;
     }
 
     const unarchiveMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/unarchive$/);
     if (unarchiveMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.unarchiveThread(decodeURIComponent(unarchiveMatch[1])));
       return;
     }
 
     const turnMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/turn$/);
     if (turnMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(turnMatch[1]);
       const data = await codex.readThread(threadId);
       const payload = await readTurnPayload(req);
@@ -2051,6 +2073,7 @@ const server = createServer(async (req, res) => {
 
     const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move)$/);
     if (queueActionMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(queueActionMatch[1]);
       const queuedId = decodeURIComponent(queueActionMatch[2]);
       const action = queueActionMatch[3];
@@ -2069,6 +2092,7 @@ const server = createServer(async (req, res) => {
 
     const steerMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/steer$/);
     if (steerMatch && req.method === 'POST') {
+      requireWriteAccess();
       const threadId = decodeURIComponent(steerMatch[1]);
       const data = await codex.readThread(threadId);
       const input = await buildTurnInput(threadId, data.thread, req);
@@ -2078,6 +2102,7 @@ const server = createServer(async (req, res) => {
 
     const interruptMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/interrupt$/);
     if (interruptMatch && req.method === 'POST') {
+      requireWriteAccess();
       sendJson(res, 200, await codex.interruptTurn(decodeURIComponent(interruptMatch[1])));
       return;
     }
@@ -2091,7 +2116,7 @@ const server = createServer(async (req, res) => {
     await serveStatic(req, res, url);
   } catch (error) {
     console.error(error);
-    sendError(res, 500, error);
+    sendError(res, error.statusCode || 500, error);
   }
 });
 

@@ -68,7 +68,7 @@ const PERMISSION_PRESETS = [
   { id: 'trusted', label: 'trusted local', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'untrusted', networkAccess: false },
   { id: 'full', label: 'full autonomous', sandboxPolicy: 'dangerFullAccess', approvalPolicy: 'never', networkAccess: false },
 ];
-let appSettings = { config: {}, models: [] };
+let appSettings = { config: {}, models: [], readOnly: false };
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const truncate = (value, max = 12000) => {
@@ -805,6 +805,17 @@ function updateSettingSource(dot, explicit) {
   dot.title = explicit ? 'Explicit override' : 'Using config value';
 }
 
+function isReadOnly() {
+  return Boolean(appSettings.readOnly);
+}
+
+function applyAccessMode() {
+  document.body.classList.toggle('read-only-mode', isReadOnly());
+  if (newSessionButton) newSessionButton.hidden = isReadOnly();
+  if (addRepoButton) addRepoButton.hidden = isReadOnly();
+  if (createWorktreeButton) createWorktreeButton.hidden = isReadOnly();
+}
+
 function normalizeRepoInput(value) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -813,6 +824,7 @@ function normalizeRepoInput(value) {
 }
 
 function openAddRepoDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   addRepoForm.reset();
   repoError.textContent = '';
   repoDisplayPreview.textContent = '-';
@@ -832,6 +844,7 @@ function updateRepoPreview() {
 
 async function addRepository(event) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const repo = normalizeRepoInput(repoUrlInput.value);
   if (!repo) return;
   saveCustomRepos([...customRepos(), repo]);
@@ -886,10 +899,12 @@ async function loadSettings() {
     appSettings = {
       config: settings.config ?? {},
       models: Array.isArray(settings.models) ? settings.models : [],
+      readOnly: Boolean(settings.readOnly),
     };
   } catch {
-    appSettings = { config: {}, models: [] };
+    appSettings = { config: {}, models: [], readOnly: false };
   }
+  applyAccessMode();
 }
 
 async function loadHealth() {
@@ -935,6 +950,7 @@ function renderRuntimeDiagnostics(data) {
         ['Git metadata', git.gitCommonDir || '-'],
       ])}
       ${renderRuntimeCard('Codex Control server', `${server.host || '127.0.0.1'}:${server.port || ''}`, 'ok', [
+        ['Access mode', server.readOnly ? 'read only' : 'read/write'],
         ['App root', server.rootDir || '-'],
         ['Codex home', server.codexHome || '-'],
         ['Node', server.node || '-'],
@@ -1011,6 +1027,7 @@ async function loadSessions({ quiet = false } = {}) {
 
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = event.currentTarget;
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
@@ -1048,6 +1065,7 @@ let currentWorktreePlan = null;
 let planTimer = null;
 
 function openCreateWorktreeDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const sourcePath = newWorktreeSelect.value;
   if (!sourcePath) return window.alert('Choose a source worktree first.');
   currentWorktreePlan = null;
@@ -1068,6 +1086,7 @@ function scheduleWorktreePlan() {
 }
 
 async function updateWorktreePlan() {
+  if (isReadOnly()) return;
   const sourcePath = newWorktreeSelect.value;
   const branch = worktreeNameInput.value.trim();
   const targetRoot = worktreeRootInput.value.trim();
@@ -1098,6 +1117,7 @@ async function updateWorktreePlan() {
 
 async function createFeatureWorktree(event) {
   event?.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   if (!currentWorktreePlan) await updateWorktreePlan();
   if (!currentWorktreePlan) return;
   confirmCreateWorktree.disabled = true;
@@ -1148,7 +1168,7 @@ function updateRepoOptions(repos) {
     options.push(`<option value="${escapeHtml(repo)}"${selected}>${escapeHtml(displayRepo(repo))} (saved)</option>`);
   }
 
-  options.push('<option value="__add_repo__">+ Add repo...</option>');
+  if (!isReadOnly()) options.push('<option value="__add_repo__">+ Add repo...</option>');
   repoFilter.innerHTML = options.join('');
   if (previous && [...repoFilter.options].some((option) => option.value === previous)) repoFilter.value = previous;
   syncNewSessionRepoOptions();
@@ -1164,6 +1184,7 @@ function syncNewSessionRepoOptions() {
 }
 
 async function openNewSessionDialog() {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   syncNewSessionRepoOptions();
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
   applyPermissionPreference(newSessionForm, permissionDefaults());
@@ -1177,7 +1198,8 @@ async function loadNewSessionWorktrees(preferredPath = '') {
   newWorktreeSelect.innerHTML = '';
   newWorktreeHint.textContent = '';
   createWorktreeButton.disabled = true;
-  createWorktreeButton.title = 'Choose a source worktree first.';
+  createWorktreeButton.hidden = isReadOnly();
+  createWorktreeButton.title = isReadOnly() ? 'Read-only mode is enabled.' : 'Choose a source worktree first.';
   if (!repo) {
     newWorktreeHint.textContent = 'Choose a repo first.';
     return;
@@ -1198,8 +1220,9 @@ async function loadNewSessionWorktrees(preferredPath = '') {
       return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}</option>`;
     }).join('');
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
-    createWorktreeButton.disabled = false;
-    createWorktreeButton.title = '';
+    createWorktreeButton.disabled = isReadOnly();
+    createWorktreeButton.hidden = isReadOnly();
+    createWorktreeButton.title = isReadOnly() ? 'Read-only mode is enabled.' : '';
     newWorktreeHint.textContent = `${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} available.`;
   } catch (error) {
     newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';
@@ -1328,6 +1351,7 @@ async function loadDetail(id, { quiet = false } = {}) {
 }
 
 function patchDetailPreservingComposer(renderedHtml, thread) {
+  if (isReadOnly()) return false;
   const currentShell = detailEl.querySelector('.detail-shell');
   const currentForm = currentShell?.querySelector('#promptForm');
   if (!currentShell || !currentForm) return false;
@@ -1336,6 +1360,7 @@ function patchDetailPreservingComposer(renderedHtml, thread) {
   container.innerHTML = renderedHtml;
   const nextShell = container.querySelector('.detail-shell');
   if (!nextShell) return false;
+  if (!nextShell.querySelector('#promptForm')) return false;
 
   for (const selector of ['.session-header', '.detail', '.jump-bottom']) {
     const current = currentShell.querySelector(selector);
@@ -1362,6 +1387,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   const timelineEvents = [...events, ...inferredModelEvents(thread, turns, events)].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   const archiveLabel = isArchived ? 'Unarchive' : 'Archive';
+  const writable = !isReadOnly();
   return `<div class="detail-shell">
     <div class="session-header">
       <details class="session-meta">
@@ -1387,10 +1413,10 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
           ${renderEventTimeline(timelineEvents)}
         </div>
       </details>
-      <div class="detail-actions">
+      ${writable ? `<div class="detail-actions">
         <button type="button" data-action="rename-thread">Rename</button>
         <button type="button" data-action="archive-thread">${archiveLabel}</button>
-      </div>
+      </div>` : ''}
     </div>
     <div class="detail">
       ${[...turns].reverse().map((turn, index) => renderTurn(turn, index, thread)).join('') || '<div class="empty">No turns returned.</div>'}
@@ -1399,7 +1425,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
     </div>
     <button type="button" class="jump-bottom" hidden>Jump to bottom</button>
     ${renderQueuedMessages(queuedMessages)}
-    <form class="prompt-bar" id="promptForm">
+    ${writable ? `<form class="prompt-bar" id="promptForm">
       <textarea name="prompt" rows="3" placeholder="Send a follow-up to this session"></textarea>
       <div class="prompt-actions">
         <label class="attach-button" title="Attach files">
@@ -1414,7 +1440,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
         <button type="submit">${isBusyThread(thread) ? 'Send after current' : 'Send'}</button>
       </div>
       <div class="attachment-preview" aria-live="polite"></div>
-    </form>
+    </form>` : ''}
   </div>`;
 }
 
@@ -1520,17 +1546,18 @@ function renderBusyIndicator(thread) {
 
 function renderQueuedMessages(messages = []) {
   if (!messages.length) return '';
+  const controls = !isReadOnly();
   return `<div class="queued-messages" aria-live="polite">
     <div class="queued-title">Queued messages</div>
     ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeHtml(message.turnId || '')}">
       <div class="queued-head">
         <span></span>
-        <div class="queued-actions">
+        ${controls ? `<div class="queued-actions">
           <button type="button" data-queue-action="up" ${index === 0 ? 'disabled' : ''}>Up</button>
           <button type="button" data-queue-action="down" ${index === messages.length - 1 ? 'disabled' : ''}>Down</button>
           <button type="button" data-queue-action="steer">Steer now</button>
           <button type="button" data-queue-action="remove">Remove</button>
-        </div>
+        </div>` : ''}
       </div>
       ${renderQueuedAttachments(message.attachments)}
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
@@ -1555,6 +1582,7 @@ function bindQueuedMessageControls(threadId) {
 }
 
 async function updateQueuedMessage(threadId, queuedId, action, button) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   if (!threadId || !queuedId || !action) return;
   button.disabled = true;
   const label = button.textContent;
@@ -1572,6 +1600,7 @@ async function updateQueuedMessage(threadId, queuedId, action, button) {
 }
 
 async function renameThread(id, thread) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const current = thread?.name || '';
   const name = window.prompt('Session name:', current);
   if (name === null) return;
@@ -1581,6 +1610,7 @@ async function renameThread(id, thread) {
 }
 
 async function toggleArchiveThread(id, thread = {}) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   if (isArchived) {
     await jsonApi(`/api/threads/${encodeURIComponent(id)}/unarchive`, {});
@@ -1598,6 +1628,7 @@ async function toggleArchiveThread(id, thread = {}) {
 }
 
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = detailEl.querySelector('#promptForm');
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
@@ -1632,6 +1663,7 @@ async function steerTurn(id, button = detailEl.querySelector('[data-action=steer
 }
 
 async function interruptTurn(id) {
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const button = detailEl.querySelector('[data-action=interrupt-turn]');
   if (button) {
     button.disabled = true;
@@ -1652,6 +1684,7 @@ async function interruptTurn(id) {
 
 async function submitPrompt(event, id) {
   event.preventDefault();
+  if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
   const pref = preferenceFromControls(form);
@@ -1767,6 +1800,7 @@ function removeAttachmentAt(input, removeIndex) {
 }
 
 function syncPromptComposerState(form, thread) {
+  if (isReadOnly()) return;
   if (!form) return;
   const busy = isBusyThread(thread);
   const submit = form.querySelector('button[type="submit"]');
@@ -2255,6 +2289,10 @@ filters.addEventListener('submit', (event) => event.preventDefault());
 filterToggle.addEventListener('click', () => setDrawerOpen(filterDrawer.hidden));
 filterClose.addEventListener('click', () => setDrawerOpen(false));
 repoFilter.addEventListener('change', () => {
+  if (isReadOnly() && repoFilter.value === '__add_repo__') {
+    repoFilter.value = savedSelectedRepo();
+    return;
+  }
   if (repoFilter.value !== '__add_repo__') {
     saveSelectedRepo(repoFilter.value);
     return;
