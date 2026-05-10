@@ -26,6 +26,7 @@ class CodexAppServer {
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
     this.permissionSettingsByThread = new Map();
+    this.attachmentsByTurn = new Map();
     this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
     this.eventsByThread = new Map();
@@ -224,7 +225,7 @@ class CodexAppServer {
     const resolvedModel = inferThreadModel(resolvedThread, resolvedTurns);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
+      turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id))),
       queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
       permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
@@ -268,6 +269,7 @@ class CodexAppServer {
     this.rememberPermissionSettings(threadId, overrides);
     const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000);
     const turnId = result.turn?.id;
+    if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
@@ -358,6 +360,19 @@ class CodexAppServer {
     const key = String(threadId);
     const current = this.permissionSettingsByThread.get(key) ?? {};
     this.permissionSettingsByThread.set(key, { ...current, ...overrides });
+  }
+
+  rememberTurnAttachments(threadId, turnId, attachments = []) {
+    if (!threadId || !turnId || !attachments.length) return;
+    const key = String(threadId);
+    const current = this.attachmentsByTurn.get(key) ?? new Map();
+    current.set(String(turnId), attachments);
+    this.attachmentsByTurn.set(key, current);
+  }
+
+  attachmentsForTurn(threadId, turnId) {
+    if (!threadId || !turnId) return [];
+    return this.attachmentsByTurn.get(String(threadId))?.get(String(turnId)) ?? [];
   }
 
   addQueuedMessage(threadId, input, overrides = {}) {
@@ -805,7 +820,7 @@ function parseWorktreeList(output) {
   });
 }
 
-function compactTurn(turn, steeredMessages = []) {
+function compactTurn(turn, steeredMessages = [], attachments = []) {
   return {
     id: turn.id,
     status: turn.status,
@@ -815,7 +830,7 @@ function compactTurn(turn, steeredMessages = []) {
     durationMs: turn.durationMs,
     model: extractModelFromPayload(turn),
     steeredMessages: steeredMessages.filter((message) => message.turnId === turn.id),
-    items: (turn.items ?? []).map(compactItem),
+    items: mergeTurnAttachments((turn.items ?? []).map(compactItem), attachments),
   };
 }
 
@@ -823,8 +838,32 @@ function compactQueuedMessage(message) {
   return {
     turnId: message.turnId,
     text: message.text,
+    attachments: attachmentsFromInput(message.input),
     createdAt: message.createdAt,
   };
+}
+
+function mergeTurnAttachments(items, attachments = []) {
+  if (!attachments.length) return items;
+  const userIndex = items.findIndex((item) => item.type === 'userMessage');
+  if (userIndex === -1) return items;
+  const next = [...items];
+  const userItem = next[userIndex];
+  const existingParts = Array.isArray(userItem.parts) ? userItem.parts : [];
+  const existingSrcs = new Set(existingParts.map((part) => part.src).filter(Boolean));
+  const attachmentParts = attachments.filter((attachment) => !existingSrcs.has(attachment.src));
+  next[userIndex] = { ...userItem, parts: [...existingParts, ...attachmentParts] };
+  return next;
+}
+
+function attachmentsFromInput(input = []) {
+  return (Array.isArray(input) ? input : [])
+    .filter((part) => part?.type === 'localImage' && part.path)
+    .map((part) => {
+      const media = mediaFromLocalFilePath(part.path);
+      return media ? { type: 'image', ...media, filename: path.basename(part.path) } : null;
+    })
+    .filter(Boolean);
 }
 
 

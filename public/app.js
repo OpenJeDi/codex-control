@@ -799,8 +799,17 @@ function renderQueuedMessages(messages = []) {
           <button type="button" data-queue-action="remove">Remove</button>
         </div>
       </div>
+      ${renderQueuedAttachments(message.attachments)}
       ${renderMarkdownText(message.text || '(attachment-only prompt)')}
     </div>`).join('')}
+  </div>`;
+}
+
+function renderQueuedAttachments(attachments = []) {
+  const images = attachments.filter((attachment) => attachment.type === 'image' && attachment.src);
+  if (!images.length) return '';
+  return `<div class="queued-attachments">
+    ${images.map((image) => `<img src="${escapeAttribute(image.src)}" alt="${escapeAttribute(image.filename || 'queued image')}" loading="lazy">`).join('')}
   </div>`;
 }
 

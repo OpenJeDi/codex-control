@@ -509,6 +509,20 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .queued-meta { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
 .queued-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .queued-actions button { padding: 4px 8px; font-size: 12px; }
+.queued-attachments {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.queued-attachments img {
+  width: 54px;
+  height: 42px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 184, 108, 0.35);
+  border-radius: 7px;
+  background: rgba(0,0,0,0.24);
+}
 .prompt-bar { display: grid; gap: 8px; align-content: end; }
 .prompt-bar textarea, .modal textarea { width: 100%; min-width: 0; resize: vertical; border: 1px solid var(--line); border-radius: 12px; background: #141619; color: var(--text); padding: 10px; font: inherit; }
 .prompt-bar textarea { order: -1; }
