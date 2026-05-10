@@ -1994,7 +1994,8 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
-      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await buildFacets(threads) });
+      const facetThreads = await codex.listThreads({ includeArchived: true, limit: 500, sourceKinds: defaultSourceKinds });
+      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await buildFacets(facetThreads) });
       return;
     }
 
