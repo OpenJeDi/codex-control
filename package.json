@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",
+    "restart": "npm run restart:windows",
     "restart:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-codex-control.ps1"
   },
   "engines": {
