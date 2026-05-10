@@ -77,12 +77,13 @@ export function createTranscriptMediaHelpers({
   function rewriteMarkdownLocalFileLinks(text, policy = {}) {
     return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const media = renderableMediaFromLocalFilePath(target, policy);
+      const media = renderableMediaFromLocalFilePath(resolveMentionedFilePath(target, policy.cwd) || target, policy);
       const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
       return media ? `![${alt}](${media.src}?kind=${kind})` : match;
     }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const media = renderableMediaFromLocalFilePath(target, policy);
+      const resolved = resolveMentionedFilePath(target, policy.cwd) || target;
+      const media = mediaFromLocalFilePath(resolved, policy);
       return media ? `[${label}](${media.src})` : match;
     });
   }
@@ -98,7 +99,7 @@ export function createTranscriptMediaHelpers({
   function rewriteInlineCodeLocalFileLinks(text, policy = {}) {
     return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
       const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
-      const media = resolved ? renderableMediaFromLocalFilePath(resolved, policy) : null;
+      const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
       return media ? `[${rawPath}](${media.src})` : match;
     });
   }
@@ -117,7 +118,7 @@ export function createTranscriptMediaHelpers({
     const source = String(text ?? '');
     return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:\.\.?[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
       const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
-      const media = resolved ? renderableMediaFromLocalFilePath(resolved, policy) : null;
+      const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
       return media ? `${prefix}[${rawPath}](${media.src})` : match;
     });
   }
