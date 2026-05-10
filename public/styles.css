@@ -409,6 +409,30 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .markdown-body ul, .markdown-body ol { margin: 0 0 10px 20px; padding: 0; }
 .markdown-body li { margin: 3px 0; }
 .markdown-body h3, .markdown-body h4, .markdown-body h5 { margin: 10px 0 6px; font-size: 14px; }
+.markdown-body table {
+  width: 100%;
+  margin: 8px 0 12px;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.markdown-body thead { background: rgba(255,255,255,0.045); }
+.markdown-body th,
+.markdown-body td {
+  padding: 7px 9px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  text-align: left;
+}
+.markdown-body th:last-child,
+.markdown-body td:last-child { border-right: 0; }
+.markdown-body tr:last-child td { border-bottom: 0; }
+.markdown-body th { color: var(--text); font-weight: 750; }
 .markdown-body code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; background: rgba(255,255,255,0.065); border: 1px solid var(--line); border-radius: 6px; padding: 1px 4px; }
 .markdown-body .md-code { position: relative; margin: 8px 0 10px; padding: 34px 10px 10px; overflow: auto; border-radius: 10px; background: rgba(0,0,0,0.24); border: 1px solid var(--line); }
 .markdown-body .md-code code { padding: 0; border: 0; background: transparent; }
