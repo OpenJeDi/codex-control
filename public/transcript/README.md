@@ -62,12 +62,12 @@ Rules:
 - `renderSessionImageFigure(src, caption, alt)`: render standard clickable transcript image markup.
 - `renderCompactDetailsItem({ type, label, body, preview, className })`: render the standard compact `<details>` item shell.
 - `renderMarkdownMedia(src, label, embedded)`: render Markdown-linked media or anchors.
-- `renderInlineMarkdown(text)`: render inline Markdown subset.
-- `renderMarkdownBlocks(text)`: render paragraph/list/heading Markdown subset.
-- `renderCodeBlockContent(code)`: render code block content with local absolute path links.
-- `renderMarkdownText(text)`: render full Markdown text, including copy-code buttons.
+- `renderInlineMarkdown(text, options)`: render inline Markdown subset. `options.cwd` lets inline code spans link local absolute paths, normal cwd-relative paths, and `...\` cwd-relative shorthand through the server media policy.
+- `renderMarkdownBlocks(text, options)`: render paragraph/list/heading Markdown subset.
+- `renderCodeBlockContent(code, options)`: render code block content with local path links.
+- `renderMarkdownText(text, options)`: render full Markdown text, including copy-code buttons.
 - `shouldRenderMarkdown(item)`: decide whether text parts should use Markdown.
-- `renderContentParts(item, fallbackBody)`: render normalized `item.parts`.
+- `renderContentParts(item, fallbackBody, options)`: render normalized `item.parts`.
 
 DOM binding helpers also live in `rendering.js`, but they are used by `public/app.js`, not parser modules:
 

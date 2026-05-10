@@ -1538,6 +1538,22 @@ function normalizeLocalFilePath(filePath) {
   return '';
 }
 
+function resolveRequestedMediaPath(filePath, cwd = '') {
+  const raw = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  const root = normalizeLocalFilePath(cwd);
+  if (root && /^(?:\.\.\.|…|\.)(?:[\\/])/.test(raw)) {
+    const relative = raw.replace(/^(?:\.\.\.|…|\.)(?:[\\/])/, '');
+    return path.win32.normalize(path.win32.join(root, relative));
+  }
+  if (root
+    && !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(raw)
+    && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)
+    && !/^[\\/]/.test(raw)) {
+    return path.win32.normalize(path.win32.join(root, raw));
+  }
+  return normalizeLocalFilePath(raw);
+}
+
 function isWindowsPath(filePath) {
   return /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(String(filePath ?? ''));
 }
@@ -2144,11 +2160,15 @@ function normalizeApprovalPolicyValue(value) {
   return ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(candidate) ? candidate : '';
 }
 
-function sendMediaPath(res, filePath) {
-  const media = fileServingMode === 'system' ? mediaFromLocalFilePath(filePath, { sandboxPolicy: 'dangerFullAccess' }) : null;
+function sendMediaPath(res, filePath, cwd = '') {
+  const target = resolveRequestedMediaPath(filePath, cwd);
+  const policy = fileServingMode === 'system'
+    ? { sandboxPolicy: 'dangerFullAccess' }
+    : { cwd, sandboxPolicy: 'workspaceWrite' };
+  const media = mediaFromLocalFilePath(target, policy);
   if (!media) {
-    res.writeHead(fileServingMode === 'system' ? 404 : 403, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end(fileServingMode === 'system' ? 'Not found' : 'System file serving is disabled.');
+    res.writeHead(target ? 403 : 404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(target ? 'File is outside the allowed media scope or unavailable.' : 'Not found');
     return;
   }
   const id = String(media.src ?? '').split('/').pop();
@@ -2229,7 +2249,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/media/path' && req.method === 'GET') {
-      sendMediaPath(res, url.searchParams.get('path'));
+      sendMediaPath(res, url.searchParams.get('path'), url.searchParams.get('cwd'));
       return;
     }
 

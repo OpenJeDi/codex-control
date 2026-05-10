@@ -2024,12 +2024,13 @@ function renderTurn(turn, index, thread) {
   const model = modelFromValue(turn);
   const effort = effortFromValue(turn);
   const summary = turnSummary(turn);
+  const renderOptions = { cwd: thread?.cwd || '' };
   const innerItems = [
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
-    ...(summary.hiddenItems ?? []).map(renderItem),
+    ...(summary.hiddenItems ?? []).map((item) => renderItem(item, renderOptions)),
     renderTurnBreak(turn, statusValue, threadBusy),
   ].filter(Boolean);
-  const visibleSteeredMessages = (turn.steeredMessages ?? []).map(renderSteeredMessage).join('');
+  const visibleSteeredMessages = (turn.steeredMessages ?? []).map((message) => renderSteeredMessage(message, renderOptions)).join('');
   const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
   const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
   return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
@@ -2037,7 +2038,7 @@ function renderTurn(turn, index, thread) {
     <div class="turn-compact">
       <article>
         <div class="item-type">Prompt</div>
-        ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)') : renderMarkdownText(summary.prompt || '(no prompt text)')}
+        ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)', renderOptions) : renderMarkdownText(summary.prompt || '(no prompt text)', renderOptions)}
       </article>
       ${visibleSteeredMessages}
       ${hasInnerItems ? `<details class="turn-details">
@@ -2046,7 +2047,7 @@ function renderTurn(turn, index, thread) {
       </details>` : ''}
       ${hasResponse ? `<article>
         <div class="item-type">Response</div>
-        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response) : renderMarkdownText(summary.response)}
+        ${summary.responseItem ? renderContentParts(summary.responseItem, summary.response, renderOptions) : renderMarkdownText(summary.response, renderOptions)}
       </article>` : ''}
     </div>
   </section>`;
@@ -2078,10 +2079,10 @@ function turnSummary(turn) {
   };
 }
 
-function renderSteeredMessage(message) {
+function renderSteeredMessage(message, options = {}) {
   return `<article class="steer-note">
     <div class="item-type">Steered prompt</div>
-    ${renderMarkdownText(message.text)}
+    ${renderMarkdownText(message.text, options)}
   </article>`;
 }
 
@@ -2203,7 +2204,7 @@ function bindImageLightbox() {
   });
 }
 
-function renderItem(item) {
+function renderItem(item, options = {}) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
@@ -2233,7 +2234,7 @@ function renderItem(item) {
 
   return `<article class="item ${escapeHtml(item.type)}">
     <div class="item-type">${escapeHtml(label)}</div>
-    ${renderContentParts(item, body)}
+    ${renderContentParts(item, body, options)}
   </article>`;
 }
 

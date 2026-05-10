@@ -34,12 +34,36 @@ export function renderMarkdownMedia(src, label = '', embedded = false) {
   return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
 }
 
-export function renderInlineMarkdown(text) {
+function localMediaPathHref(filePath, options = {}) {
+  const rawPath = String(filePath ?? '').trim().replace(/^["']|["']$/g, '');
+  if (!rawPath) return '';
+  const isAbsolute = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(rawPath);
+  const isCwdRelative = /^(?:\.\.\.|…|\.)(?:[\\/])/.test(rawPath);
+  const isPlainRelative = !isAbsolute
+    && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath)
+    && !/^[\\/]/.test(rawPath)
+    && /[\\/]/.test(rawPath);
+  if (!isAbsolute && !isCwdRelative && !isPlainRelative) return '';
+
+  const params = new URLSearchParams({ path: rawPath });
+  const cwd = String(options.cwd ?? '').trim();
+  if (cwd) params.set('cwd', cwd);
+  return `/api/media/path?${params.toString()}`;
+}
+
+function renderCodeSpan(code, options = {}) {
+  const value = String(code ?? '');
+  const href = localMediaPathHref(value, options);
+  if (!href) return `<code>${escapeHtml(value)}</code>`;
+  return `<code><a class="code-file-link" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(value)}</a></code>`;
+}
+
+export function renderInlineMarkdown(text, options = {}) {
   const codeSpans = [];
   const media = [];
   const pushCodeSpan = (code) => {
     const token = `@@CODE${codeSpans.length}@@`;
-    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
+    codeSpans.push(renderCodeSpan(code, options));
     return token;
   };
   let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
@@ -72,7 +96,7 @@ function isMarkdownTableSeparator(line) {
   return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
-function renderMarkdownTable(headerLine, separatorLine, bodyLines) {
+function renderMarkdownTable(headerLine, separatorLine, bodyLines, options = {}) {
   const headers = splitMarkdownTableRow(headerLine);
   const separator = splitMarkdownTableRow(separatorLine);
   const columnCount = Math.min(headers.length, separator.length);
@@ -82,18 +106,18 @@ function renderMarkdownTable(headerLine, separatorLine, bodyLines) {
     return Array.from({ length: columnCount }, (_value, index) => cells[index] ?? '');
   };
   const head = normalizeCells(headerLine)
-    .map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`)
+    .map((cell) => `<th>${renderInlineMarkdown(cell, options)}</th>`)
     .join('');
   const body = bodyLines.map((line) => {
     const cells = normalizeCells(line)
-      .map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`)
+      .map((cell) => `<td>${renderInlineMarkdown(cell, options)}</td>`)
       .join('');
     return `<tr>${cells}</tr>`;
   }).join('');
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-export function renderMarkdownBlocks(text) {
+export function renderMarkdownBlocks(text, options = {}) {
   const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
   const blocks = [];
   let paragraph = [];
@@ -101,12 +125,12 @@ export function renderMarkdownBlocks(text) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(' '), options)}</p>`);
     paragraph = [];
   };
   const flushList = () => {
     if (!list) return;
-    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${list.type}>`);
+    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${renderInlineMarkdown(item, options)}</li>`).join('')}</${list.type}>`);
     list = null;
   };
 
@@ -124,7 +148,7 @@ export function renderMarkdownBlocks(text) {
         tableLines.push(lines[nextIndex]);
         nextIndex += 1;
       }
-      const table = renderMarkdownTable(line, lines[index + 1], tableLines);
+      const table = renderMarkdownTable(line, lines[index + 1], tableLines, options);
       if (table) {
         flushParagraph();
         flushList();
@@ -138,7 +162,7 @@ export function renderMarkdownBlocks(text) {
       flushParagraph();
       flushList();
       const level = heading[1].length + 2;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2].trim(), options)}</h${level}>`);
       continue;
     }
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
@@ -162,7 +186,7 @@ export function renderMarkdownBlocks(text) {
   return blocks.join('') || '<p></p>';
 }
 
-export function renderCodeBlockContent(code) {
+export function renderCodeBlockContent(code, options = {}) {
   const source = String(code ?? '');
   const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+)/g;
   let html = '';
@@ -173,21 +197,24 @@ export function renderCodeBlockContent(code) {
     const rawPath = rawMatch.replace(/[.,;:]+$/g, '');
     const suffix = rawMatch.slice(rawPath.length);
     html += escapeHtml(source.slice(lastIndex, start));
-    html += `<a class="code-file-link" href="/api/media/path?path=${encodeURIComponent(rawPath)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`;
+    const href = localMediaPathHref(rawPath, options);
+    html += href
+      ? `<a class="code-file-link" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`
+      : `${escapeHtml(rawPath)}${escapeHtml(suffix)}`;
     lastIndex = start + rawMatch.length;
   }
   html += escapeHtml(source.slice(lastIndex));
   return html;
 }
 
-export function renderMarkdownText(text) {
+export function renderMarkdownText(text, options = {}) {
   const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
   return `<div class="markdown-body">${segments.map((segment, index) => {
     if (index % 2 === 1) {
       const code = segment.replace(/^\w+\n/, '');
-      return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${renderCodeBlockContent(code)}</code></pre>`;
+      return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${renderCodeBlockContent(code, options)}</code></pre>`;
     }
-    return renderMarkdownBlocks(segment);
+    return renderMarkdownBlocks(segment, options);
   }).join('')}</div>`;
 }
 
@@ -195,8 +222,8 @@ export function shouldRenderMarkdown(item) {
   return item?.type === 'userMessage' || item?.type === 'agentMessage' || item?.type === 'reasoning';
 }
 
-export function renderContentParts(item, fallbackBody) {
-  const renderText = (text) => shouldRenderMarkdown(item) ? renderMarkdownText(text) : `<pre>${escapeHtml(text)}</pre>`;
+export function renderContentParts(item, fallbackBody, options = {}) {
+  const renderText = (text) => shouldRenderMarkdown(item) ? renderMarkdownText(text, options) : `<pre>${escapeHtml(text)}</pre>`;
   if (!Array.isArray(item?.parts) || !item.parts.length) return renderText(fallbackBody);
   return item.parts.map((part) => {
     if (part.type === 'text') return part.text ? renderText(part.text) : '';
