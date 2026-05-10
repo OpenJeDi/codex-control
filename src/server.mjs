@@ -856,10 +856,18 @@ async function worktreesForRepo(repoUrl) {
     .map((thread) => thread.cwd)
     .filter(Boolean);
 
+  try {
+    const currentGit = await gitInfoForCwd(rootDir);
+    if (includes(currentGit.originUrl, repo) || includes(rootDir, repo)) candidates.unshift(rootDir);
+  } catch {
+    // Current app repo fallback is best-effort only.
+  }
+
   const seen = new Set();
   for (const cwd of candidates) {
-    if (seen.has(cwd)) continue;
-    seen.add(cwd);
+    const key = String(cwd).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     try {
       const output = await execFileText('git', ['-C', cwd, 'worktree', 'list', '--porcelain']);
       return { repo, source: cwd, worktrees: parseWorktreeList(output) };
@@ -1374,16 +1382,25 @@ async function buildWorktreePlan(body) {
   const branch = cleanSlug(rawBranch.startsWith('feature-') ? rawBranch : rawBranch);
   assertSafeBranch(branch);
   if (!sourcePath) throw new Error('Choose an existing worktree as the source.');
+  if (!existsSync(sourcePath)) throw new Error(`Source worktree does not exist: ${sourcePath}`);
 
   const targetRoot = String(body.targetRoot ?? '').trim() || repoWorktreeRoot(sourcePath);
   const targetPath = path.win32.join(targetRoot, branch);
-  const display = `git -C ${quoteWinArg(sourcePath)} worktree add -b ${quoteWinArg(branch)} ${quoteWinArg(targetPath)}`;
+  const existing = await execFileText('git', ['-C', sourcePath, 'branch', '--list', branch]);
+  const branchExists = Boolean(existing.trim());
+  const args = branchExists
+    ? ['-C', sourcePath, 'worktree', 'add', targetPath, branch]
+    : ['-C', sourcePath, 'worktree', 'add', '-b', branch, targetPath];
+  const display = branchExists
+    ? `git -C ${quoteWinArg(sourcePath)} worktree add ${quoteWinArg(targetPath)} ${quoteWinArg(branch)}`
+    : `git -C ${quoteWinArg(sourcePath)} worktree add -b ${quoteWinArg(branch)} ${quoteWinArg(targetPath)}`;
   return {
     sourcePath,
     branch,
+    branchExists,
     targetRoot,
     targetPath,
-    commands: [{ display, command: 'git', args: ['-C', sourcePath, 'worktree', 'add', '-b', branch, targetPath] }],
+    commands: [{ display, command: 'git', args }],
   };
 }
 
@@ -1395,11 +1412,10 @@ async function createWorktree(body) {
   if (!body.confirmed) throw new Error('Worktree creation requires confirmation.');
   const plan = await buildWorktreePlan(body);
   if (existsSync(plan.targetPath)) throw new Error(`Target path already exists: ${plan.targetPath}`);
-  const existing = await execFileText('git', ['-C', plan.sourcePath, 'branch', '--list', plan.branch]);
-  if (existing.trim()) throw new Error(`Branch already exists: ${plan.branch}`);
+  await mkdir(plan.targetRoot, { recursive: true });
   const command = plan.commands[0];
   await execFileText(command.command, command.args);
-  return { ...plan, created: true };
+  return { ...plan, created: true, worktree: { path: plan.targetPath, branch: plan.branch } };
 }
 
 async function readJson(req) {
