@@ -1,7 +1,9 @@
 param(
-  [string]$TaskName = 'codex-control',
+  [string]$TaskName = $env:CODEX_CONTROL_RESTART_TASK,
   [string]$HealthUrl = 'http://127.0.0.1:4567/api/health',
-  [int]$WaitSeconds = 3
+  [int]$WaitSeconds = 3,
+  [string]$StartCommand = 'node',
+  [string[]]$StartArgs = @('src/server.mjs')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,8 +18,13 @@ Get-CimInstance Win32_Process |
     Stop-Process -Id $_.ProcessId -Force
   }
 
-Write-Host "Starting scheduled task '$TaskName'..."
-Start-ScheduledTask -TaskName $TaskName
+if ($TaskName) {
+  Write-Host "Starting scheduled task '$TaskName'..."
+  Start-ScheduledTask -TaskName $TaskName
+} else {
+  Write-Host "Starting Codex Control directly..."
+  Start-Process -FilePath $StartCommand -ArgumentList $StartArgs -WorkingDirectory $root -WindowStyle Hidden
+}
 Start-Sleep -Seconds $WaitSeconds
 
 Write-Host "Checking health: $HealthUrl"

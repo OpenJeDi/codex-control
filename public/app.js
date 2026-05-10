@@ -78,7 +78,10 @@ const truncate = (value, max = 12000) => {
 const fmtTime = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : '';
 const fmtMillis = (millis) => millis ? new Date(millis).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 const updatedTitle = (seconds) => seconds ? `Updated ${fmtTime(seconds)}` : 'Updated time unknown';
-const compactPath = (value) => String(value ?? '').replace(/^C:\\Users\\jeroe\\work\\personal\\/i, '');
+const compactPath = (value) => String(value ?? '')
+  .replace(/^[A-Z]:\\Users\\[^\\]+\\/i, '~\\')
+  .replace(/^\/home\/[^/]+\//i, '~/')
+  .replace(/^\/Users\/[^/]+\//i, '~/');
 const statusType = (thread) => thread?.status?.type || 'idle';
 const statusClass = (thread) => statusType(thread).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
 const busyStatusTypes = new Set(['active', 'externalactive', 'running', 'inprogress']);

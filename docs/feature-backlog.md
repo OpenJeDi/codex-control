@@ -30,7 +30,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 
 ## Prompt queue, steering, interruption, and approval UX
 
-Status: core behavior implemented in the session-interaction branch; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
+Status: core behavior is implemented; remaining items are polish/follow-up unless noted in `docs/implementation-status.md`.
 
 - Implemented: when a turn is active, normal Send queues the message for after the agent finishes and shows the queued message above the prompt bar.
 - Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
@@ -54,7 +54,7 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 - Add subtle rollback buttons between turns/sections so the user can roll the conversation back to that point.
 - Before rollback, show a warning and current worktree dirty state/diff summary when possible.
 - Longer term, pair session rollback with optional git/file rollback helpers so model-made changes can be reverted deliberately.
-- Do not prioritize forking; it does not fit the intended JeDi/Brain workflow unless a clear use case appears later.
+- Do not prioritize forking unless a clear use case appears later.
 
 ## Explicitly out of current scope
 

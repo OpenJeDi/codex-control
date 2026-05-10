@@ -13,6 +13,7 @@ const rootDir = path.resolve(__dirname, '..');
 const publicDir = path.join(rootDir, 'public');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
+const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
 const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
@@ -1552,6 +1553,10 @@ function quoteWinArg(value) {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+function quotePowerShellSingle(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 async function createWorktree(body) {
   if (!body.confirmed) throw new Error('Worktree creation requires confirmation.');
   const plan = await buildWorktreePlan(body);
@@ -1811,7 +1816,7 @@ async function runtimeDiagnostics() {
       permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
     },
     commands: {
-      restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'node\\s+src\\\\server\\.mjs|node\\s+src/server\\.mjs' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask -TaskName 'codex-control'; Start-Sleep -Seconds 3; (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:${port}/api/health').StatusCode"`,
+      restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restart-codex-control.ps1${restartTaskName ? ` -TaskName ${quotePowerShellSingle(restartTaskName)}` : ''}`,
       neededAccess: `Allow this Codex session to write: ${recommendedWritableRoot}`,
     },
   };
