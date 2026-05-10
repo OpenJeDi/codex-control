@@ -1132,7 +1132,7 @@ async function createFeatureWorktree(event) {
   confirmCreateWorktree.disabled = true;
   confirmCreateWorktree.textContent = 'Creating...';
   try {
-    const sessionName = worktreeNameInput.value.trim() || currentWorktreePlan.branch;
+    const sessionName = currentWorktreePlan.branch || worktreeNameInput.value.trim();
     const created = await jsonApi('/api/worktrees', {
       sourcePath: currentWorktreePlan.sourcePath,
       branch: currentWorktreePlan.branch,
