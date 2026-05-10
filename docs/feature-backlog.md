@@ -7,7 +7,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Editable developer instructions for new sessions.
 - Codex config read/write with diff + confirm.
 - Model/provider/reasoning/sandbox defaults. Implemented for permissions: browser-local global defaults plus per-session overrides survive Codex Control server restarts.
-- Account and rate-limit visibility.
+- Account and rate-limit visibility, including explicit credit-exhausted/account-blocked states when a session cannot continue.
 - Skills, plugins, MCP, and hooks surfaces.
 - Filesystem browser and watch features.
 - Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
@@ -35,7 +35,7 @@ Status: core behavior implemented in the session-interaction branch; remaining i
 - Implemented: explicit Steer action sends the draft immediately with verified `turn/steer` params and annotates the transcript.
 - Implemented: clear Stop action interrupts the active turn with verified `turn/interrupt` params, renders a stopped break line, and clears stale local busy state when app-server has no active turn.
 - Follow-up polish: persist queued-message annotations across app restarts if this proves necessary.
-- Follow-up: add approval request UX for app-server command/file/tool approval prompts and send decisions back to app-server before relying on prompt-capable approval policies.
+- Follow-up: add blocked-agent UX for app-server command/file/tool approval prompts and credit/rate-limit/account-blocked states. Approval prompts should send decisions back to app-server; account/credit blocks should be shown as actionable blocking states with recovery guidance.
 - Avoid exposing protocol labels like `thread/start` and `thread/resume` directly in the main UI; use user-facing labels like New session, Open session, Continue, Send, Steer, Stop.
 - Consider a compact compaction control/status later: expose manual compaction only if useful, and show compaction events when they happen.
 
