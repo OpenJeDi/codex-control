@@ -1,4 +1,4 @@
-import { createTranscriptBlockRenderer } from './transcript/registry.js';
+import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
 
 const statusEl = document.querySelector('#status');
 const listEl = document.querySelector('#sessionList');
@@ -39,6 +39,7 @@ const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 let transcriptBlockRenderer;
+let transcriptItemRenderer;
 function getTranscriptBlockRenderer() {
   if (transcriptBlockRenderer) return transcriptBlockRenderer;
   transcriptBlockRenderer = createTranscriptBlockRenderer({
@@ -46,6 +47,14 @@ function getTranscriptBlockRenderer() {
     escapeAttribute,
   });
   return transcriptBlockRenderer;
+}
+function getTranscriptItemRenderer() {
+  if (transcriptItemRenderer) return transcriptItemRenderer;
+  transcriptItemRenderer = createTranscriptItemRenderer({
+    escapeHtml,
+    escapeAttribute,
+  });
+  return transcriptItemRenderer;
 }
 
 const truncate = (value, max = 12000) => {
@@ -1489,10 +1498,13 @@ function renderItem(item) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
+  const customItem = renderSingleItem(item);
   const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
   const preview = noisy ? body.slice(0, 220).replace(/\s+/g, ' ').trim() : body;
+
+  if (customItem) return customItem;
 
   if (customBlocks) {
     return `<article class="item ${escapeHtml(item.type)}">
@@ -1524,6 +1536,11 @@ function renderItemBlocks(item) {
   if (!blocks.length) return '';
   const renderer = getTranscriptBlockRenderer();
   return renderer(blocks);
+}
+
+function renderSingleItem(item) {
+  const parser = getTranscriptItemRenderer();
+  return parser([item]);
 }
 
 function scheduleLoadSessions() {
