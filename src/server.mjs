@@ -994,7 +994,8 @@ async function worktreesForRepo(repoUrl) {
   const repo = String(repoUrl ?? '').trim();
   if (!repo) return { repo, worktrees: [], source: 'none' };
 
-  const threads = await codex.listThreads({ includeArchived: true });
+  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  const threadsByCwd = threadsByCwdMap(threads);
   const candidates = threads
     .filter((thread) => includes(`${thread.gitInfo?.originUrl ?? ''}\n${thread.cwd ?? ''}\n${thread.path ?? ''}`, repo))
     .map((thread) => thread.cwd)
@@ -1014,13 +1015,48 @@ async function worktreesForRepo(repoUrl) {
     seen.add(key);
     try {
       const output = await execFileText('git', gitArgs(cwd, ['worktree', 'list', '--porcelain']));
-      return { repo, source: cwd, worktrees: parseWorktreeList(output) };
+      return {
+        repo,
+        source: cwd,
+        worktrees: parseWorktreeList(output).map((worktree) => ({
+          ...worktree,
+          session: threadsByCwd.get(pathKey(worktree.path)) ?? null,
+        })),
+      };
     } catch {
       // Try the next known cwd.
     }
   }
 
   return { repo, worktrees: [], source: 'not-found' };
+}
+
+function pathKey(value) {
+  const text = String(value ?? '').trim();
+  return text ? path.normalize(text).toLowerCase() : '';
+}
+
+function threadsByCwdMap(threads = []) {
+  const map = new Map();
+  for (const thread of threads) {
+    const key = pathKey(thread.cwd);
+    if (!key || map.has(key)) continue;
+    map.set(key, {
+      id: thread.id,
+      name: thread.name || '',
+      status: normalizeStatus(thread.status),
+      archived: Boolean(thread.archived || thread.isArchived || thread.archivedAt || thread.archived_at),
+      updatedAt: thread.updatedAt,
+    });
+  }
+  return map;
+}
+
+async function existingThreadForCwd(cwd) {
+  const key = pathKey(cwd);
+  if (!key) return null;
+  const threads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  return threads.find((thread) => pathKey(thread.cwd) === key) ?? null;
 }
 
 function parseWorktreeList(output) {
@@ -2003,6 +2039,8 @@ const server = createServer(async (req, res) => {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
       if (!cwd) throw new Error('Choose a worktree first.');
+      const existing = await existingThreadForCwd(cwd);
+      if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
       const overrides = turnOverridesFromPayload(payload);
       const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;

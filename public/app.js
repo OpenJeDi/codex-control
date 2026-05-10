@@ -51,6 +51,7 @@ let debounceTimer = null;
 let detailRefreshTimer = null;
 let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+let newSessionWorktrees = [];
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
@@ -1031,6 +1032,8 @@ async function startSessionFromSelectedWorktree(event) {
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
   if (!cwd) return window.alert('Choose a worktree first.');
+  const selected = newSessionWorktrees.find((item) => item.path === cwd);
+  if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
   formData.set('cwd', cwd);
 
   const submit = form.querySelector('button[type="submit"]');
@@ -1060,7 +1063,7 @@ let currentWorktreePlan = null;
 let planTimer = null;
 
 function openCreateWorktreeDialog() {
-  const sourcePath = newWorktreeSelect.value;
+  const sourcePath = selectedWorktreeSourcePath();
   if (!sourcePath) return window.alert('Choose a source worktree first.');
   currentWorktreePlan = null;
   createWorktreeForm.reset();
@@ -1080,7 +1083,7 @@ function scheduleWorktreePlan() {
 }
 
 async function updateWorktreePlan() {
-  const sourcePath = newWorktreeSelect.value;
+  const sourcePath = selectedWorktreeSourcePath();
   const branch = worktreeNameInput.value.trim();
   const targetRoot = worktreeRootInput.value.trim();
   currentWorktreePlan = null;
@@ -1186,10 +1189,13 @@ async function openNewSessionDialog() {
 
 async function loadNewSessionWorktrees(preferredPath = '') {
   const repo = newRepoSelect.value.trim();
+  const startButton = newSessionForm.querySelector('button[type="submit"]');
+  newSessionWorktrees = [];
   newWorktreeSelect.innerHTML = '';
   newWorktreeHint.textContent = '';
   createWorktreeButton.disabled = true;
   createWorktreeButton.title = 'Choose a source worktree first.';
+  if (startButton) startButton.disabled = true;
   if (!repo) {
     newWorktreeHint.textContent = 'Choose a repo first.';
     return;
@@ -1199,6 +1205,7 @@ async function loadNewSessionWorktrees(preferredPath = '') {
     newWorktreeSelect.innerHTML = '<option value="">Loading worktrees...</option>';
     const data = await api(`/api/repo-worktrees?repo=${encodeURIComponent(repo)}`);
     const worktrees = (data.worktrees ?? []).filter((item) => !item.bare);
+    newSessionWorktrees = worktrees;
     if (!worktrees.length) {
       newWorktreeSelect.innerHTML = '<option value="">No local worktrees found</option>';
       newWorktreeHint.textContent = 'No known local worktree yet. Open an existing Codex session for this repo first, or add the repo from a known lane.';
@@ -1207,16 +1214,37 @@ async function loadNewSessionWorktrees(preferredPath = '') {
 
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
-      return `<option value="${escapeHtml(item.path)}">${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}</option>`;
+      const attached = Boolean(item.session);
+      const sessionName = item.session?.name || item.session?.id || 'session';
+      const suffix = attached ? ` — has session: ${sessionName}` : '';
+      return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
     }).join('');
-    if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath)) newWorktreeSelect.value = preferredPath;
+    const available = worktrees.filter((item) => !item.session);
+    if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath && !option.disabled)) newWorktreeSelect.value = preferredPath;
+    else if (available[0]) newWorktreeSelect.value = available[0].path;
     createWorktreeButton.disabled = false;
-    createWorktreeButton.title = '';
-    newWorktreeHint.textContent = `${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} available.`;
+    createWorktreeButton.title = 'Create a new worktree from this repo.';
+    updateNewSessionStartState();
+    newWorktreeHint.textContent = available.length
+      ? `${available.length} of ${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} can start a new session. Attached worktrees are disabled.`
+      : `All ${worktrees.length} known worktree${worktrees.length === 1 ? '' : 's'} already have sessions. Create a new worktree to start another session.`;
   } catch (error) {
     newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';
     newWorktreeHint.textContent = error.message;
   }
+}
+
+function selectedWorktreeSourcePath() {
+  return newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '';
+}
+
+function updateNewSessionStartState() {
+  const startButton = newSessionForm.querySelector('button[type="submit"]');
+  if (!startButton) return;
+  const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value);
+  const canStart = Boolean(selected && !selected.session);
+  startButton.disabled = !canStart;
+  startButton.title = canStart ? '' : 'Choose a worktree without an existing session, or create a new worktree.';
 }
 
 function renderBranchGroups(sessions) {
@@ -2296,6 +2324,7 @@ cancelAddRepo.addEventListener('click', () => addRepoDialog.close());
 runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
+newWorktreeSelect.addEventListener('change', updateNewSessionStartState);
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
 createWorktreeButton.addEventListener('click', openCreateWorktreeDialog);
 createWorktreeForm.addEventListener('submit', createFeatureWorktree);
