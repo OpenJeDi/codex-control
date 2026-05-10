@@ -1163,7 +1163,10 @@ function rewriteMarkdownLocalFileLinks(text) {
 }
 
 function rewriteLocalFileReferences(text, cwd = '') {
-  return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(text), cwd), cwd);
+  return String(text ?? '').split(/(```[\s\S]*?```)/g).map((segment) => {
+    if (segment.startsWith('```')) return segment;
+    return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(segment), cwd), cwd);
+  }).join('');
 }
 
 function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
