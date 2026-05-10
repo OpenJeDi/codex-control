@@ -1306,10 +1306,31 @@ function renderMarkdownBlocks(text) {
   return blocks.join('') || '<p></p>';
 }
 
+function renderCodeBlockContent(code) {
+  const source = String(code ?? '');
+  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+)/g;
+  let html = '';
+  let lastIndex = 0;
+  for (const match of source.matchAll(pathPattern)) {
+    const rawMatch = match[1];
+    const start = match.index ?? 0;
+    const rawPath = rawMatch.replace(/[.,;:]+$/g, '');
+    const suffix = rawMatch.slice(rawPath.length);
+    html += escapeHtml(source.slice(lastIndex, start));
+    html += `<a class="code-file-link" href="/api/media/path?path=${encodeURIComponent(rawPath)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`;
+    lastIndex = start + rawMatch.length;
+  }
+  html += escapeHtml(source.slice(lastIndex));
+  return html;
+}
+
 function renderMarkdownText(text) {
   const segments = String(text ?? '').replace(/\r\n/g, '\n').split(/```/);
   return `<div class="markdown-body">${segments.map((segment, index) => {
-    if (index % 2 === 1) return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${escapeHtml(segment.replace(/^\w+\n/, ''))}</code></pre>`;
+    if (index % 2 === 1) {
+      const code = segment.replace(/^\w+\n/, '');
+      return `<pre class="md-code"><button type="button" class="copy-code" title="Copy code" aria-label="Copy code">Copy</button><code>${renderCodeBlockContent(code)}</code></pre>`;
+    }
     return renderMarkdownBlocks(segment);
   }).join('')}</div>`;
 }

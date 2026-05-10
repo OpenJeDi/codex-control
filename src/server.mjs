@@ -1623,6 +1623,16 @@ async function runtimeDiagnostics() {
   };
 }
 
+function sendMediaPath(res, filePath) {
+  const media = mediaFromLocalFilePath(filePath);
+  if (!media) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+  const id = String(media.src ?? '').split('/').pop();
+  sendMedia(res, id);
+}
 function sendMedia(res, id) {
   const media = mediaById.get(id);
   if (!media) {
@@ -1676,6 +1686,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/runtime' && req.method === 'GET') {
       sendJson(res, 200, await runtimeDiagnostics());
+      return;
+    }
+
+    if (url.pathname === '/api/media/path' && req.method === 'GET') {
+      sendMediaPath(res, url.searchParams.get('path'));
       return;
     }
 
