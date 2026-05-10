@@ -485,7 +485,9 @@ async function loadDetail(id, { quiet = false } = {}) {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     detailEl.className = 'detail-host';
     detailEl.innerHTML = renderDetail(data);
-    detailEl.querySelector('#promptForm')?.addEventListener('submit', (event) => submitPrompt(event, id));
+    const promptForm = detailEl.querySelector('#promptForm');
+    promptForm?.addEventListener('submit', (event) => submitPrompt(event, id));
+    bindPromptKeyboard(promptForm);
     detailEl.querySelector('[data-action=rename-thread]')?.addEventListener('click', () => renameThread(id, data.thread));
     detailEl.querySelector('[data-action=archive-thread]')?.addEventListener('click', () => archiveThread(id));
     detailEl.querySelector('[data-action=interrupt-turn]')?.addEventListener('click', () => interruptTurn(id));
@@ -692,9 +694,23 @@ async function submitPrompt(event, id) {
   }
 }
 
+function bindPromptKeyboard(form) {
+  const textarea = form?.querySelector('textarea[name="prompt"]');
+  if (!form || !textarea) return;
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    form.requestSubmit();
+  });
+}
+
 function renderTurn(turn, index, thread) {
-  const activeLatestTurn = index === 0 && isBusyThread(thread);
-  const statusValue = activeLatestTurn ? statusLabel(thread) : turn.status;
+  const threadBusy = isBusyThread(thread);
+  const turnStatus = String(turn.status ?? '').toLowerCase();
+  const activeLatestTurn = index === 0 && threadBusy;
+  const statusValue = activeLatestTurn
+    ? statusLabel(thread)
+    : (threadBusy && turnStatus === 'interrupted' ? '' : turn.status);
   const status = String(statusValue ?? '').toLowerCase();
   const model = modelFromValue(turn);
   const summary = turnSummary(turn);
@@ -702,7 +718,7 @@ function renderTurn(turn, index, thread) {
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
     ...(summary.hiddenItems ?? []).map(renderItem),
     ...(turn.steeredMessages ?? []).map(renderSteeredMessage),
-    renderTurnBreak(turn, statusValue, isBusyThread(thread)),
+    renderTurnBreak(turn, statusValue, threadBusy),
   ].filter(Boolean);
   const hasInnerItems = innerItems.length > 0;
   return `<section class="turn ${escapeHtml(status)}">

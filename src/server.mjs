@@ -234,6 +234,13 @@ class CodexAppServer {
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
+  async resumeThread(threadId) {
+    await this.ready;
+    const result = await this.request('thread/resume', { threadId }, 30000);
+    if (result.thread) this.rememberStatus('thread/resumed', { thread: result.thread });
+    return { ...result, thread: await this.decorateThread(result.thread) };
+  }
+
   async startTurn(threadId, input) {
     await this.ready;
     let activeBefore = null;
@@ -1302,6 +1309,7 @@ const server = createServer(async (req, res) => {
       const threadId = decodeURIComponent(turnMatch[1]);
       const data = await codex.readThread(threadId);
       const input = await buildTurnInput(threadId, data.thread, req);
+      await codex.resumeThread(threadId);
       sendJson(res, 200, await codex.startTurn(threadId, input));
       return;
     }
