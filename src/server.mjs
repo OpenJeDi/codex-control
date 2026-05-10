@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -25,6 +25,8 @@ class CodexAppServer {
     this.statusByThread = new Map();
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
+    this.permissionSettingsByThread = new Map();
+    this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
     this.eventsByThread = new Map();
     this.eventClients = new Set();
@@ -99,6 +101,7 @@ class CodexAppServer {
   handleNotification(message) {
     const method = message.method;
     const params = message.params ?? {};
+    this.maybeDrainQueuedTurn(method, params);
     this.rememberStatus(method, params);
     this.rememberEvent(method, params);
     this.broadcast('codex-notification', { method, params });
@@ -222,15 +225,19 @@ class CodexAppServer {
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
       turns: resolvedTurns.map((turn) => compactTurn(turn, this.steeredMessagesByThread.get(key) ?? [])),
-      queuedMessages: this.queuedMessagesByThread.get(key) ?? [],
+      queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map(compactQueuedMessage),
+      permissionSettings: this.permissionSettingsByThread.get(key) ?? {},
       events: this.eventsByThread.get(key) ?? [],
     };
   }
 
-  async startThread(cwd) {
+  async startThread(cwd, overrides = {}) {
     await this.ready;
     const result = await this.request('thread/start', { cwd }, 30000);
-    if (result.thread) this.rememberStatus('thread/started', { thread: result.thread });
+    if (result.thread) {
+      this.rememberStatus('thread/started', { thread: result.thread });
+      this.rememberPermissionSettings(result.thread.id, overrides);
+    }
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
@@ -241,7 +248,7 @@ class CodexAppServer {
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
-  async startTurn(threadId, input) {
+  async startTurn(threadId, input, overrides = {}) {
     await this.ready;
     let activeBefore = null;
     try {
@@ -250,16 +257,17 @@ class CodexAppServer {
       if (!isTurnsNotReadyError(error)) throw error;
     }
 
-    const result = await this.request('turn/start', { threadId, input }, 30000);
-    const turnId = result.turn?.id;
-    if (activeBefore && turnId && String(activeBefore) !== String(turnId)) {
-      this.addQueuedMessage(threadId, turnId, input);
+    if (activeBefore) {
+      const queued = this.addQueuedMessage(threadId, input, overrides);
       this.statusByThread.set(String(threadId), { type: 'running' });
-      this.rememberEvent('turn/queued', { threadId, turnId });
-      this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId } });
-      return result;
+      this.rememberEvent('turn/queued', { threadId, turnId: queued.turnId });
+      this.broadcast('codex-notification', { method: 'turn/queued', params: { threadId, turnId: queued.turnId } });
+      return { queued: true, threadId, turn: { id: queued.turnId, status: 'queued' } };
     }
 
+    this.rememberPermissionSettings(threadId, overrides);
+    const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000);
+    const turnId = result.turn?.id;
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
     this.rememberEvent('turn/started', { threadId, turnId, status: { type: 'running' } });
@@ -345,19 +353,55 @@ class CodexAppServer {
     this.eventsByThread.set(key, [...current, event].slice(-80));
   }
 
-  addQueuedMessage(threadId, turnId, input) {
+  rememberPermissionSettings(threadId, overrides = {}) {
+    if (!threadId || !Object.keys(overrides).length) return;
+    const key = String(threadId);
+    const current = this.permissionSettingsByThread.get(key) ?? {};
+    this.permissionSettingsByThread.set(key, { ...current, ...overrides });
+  }
+
+  addQueuedMessage(threadId, input, overrides = {}) {
     const text = textFromContent(input);
     const key = String(threadId);
+    const turnId = `queued-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const current = this.queuedMessagesByThread.get(key) ?? [];
-    this.queuedMessagesByThread.set(key, [...current, { turnId, text: truncate(text, 1600), createdAt: Date.now() }].slice(-25));
+    const message = { turnId, input, overrides, text: truncate(text, 1600), createdAt: Date.now() };
+    this.queuedMessagesByThread.set(key, [...current, message].slice(-25));
+    return message;
   }
 
   removeQueuedMessage(threadId, turnId) {
     const key = String(threadId);
     const current = this.queuedMessagesByThread.get(key) ?? [];
+    const removed = current.find((message) => String(message.turnId) === String(turnId)) ?? null;
     const next = current.filter((message) => String(message.turnId) !== String(turnId));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
+    return removed ? compactQueuedMessage(removed) : null;
+  }
+
+  moveQueuedMessage(threadId, turnId, direction) {
+    const key = String(threadId);
+    const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
+    const index = current.findIndex((message) => String(message.turnId) === String(turnId));
+    if (index === -1) return current.map(compactQueuedMessage);
+    const delta = direction === 'down' ? 1 : -1;
+    const target = Math.max(0, Math.min(current.length - 1, index + delta));
+    if (target !== index) {
+      const [message] = current.splice(index, 1);
+      current.splice(target, 0, message);
+      this.queuedMessagesByThread.set(key, current);
+    }
+    return current.map(compactQueuedMessage);
+  }
+
+  async steerQueuedMessage(threadId, turnId) {
+    const key = String(threadId);
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const message = current.find((queued) => String(queued.turnId) === String(turnId));
+    if (!message) throw new Error('Queued message not found.');
+    this.removeQueuedMessage(threadId, turnId);
+    return this.steerTurn(threadId, message.input);
   }
 
   pruneQueuedMessages(threadId, seenTurnIds) {
@@ -366,6 +410,46 @@ class CodexAppServer {
     const next = current.filter((message) => !seenTurnIds.has(String(message.turnId)));
     if (next.length) this.queuedMessagesByThread.set(key, next);
     else this.queuedMessagesByThread.delete(key);
+  }
+
+  maybeDrainQueuedTurn(method, params = {}) {
+    const lower = String(method ?? '').toLowerCase();
+    if (!lower.includes('turn/completed') && !lower.includes('turncompleted') && !lower.includes('interrupt')) return;
+    let threadId = params.threadId ?? params.thread?.id;
+    const turnId = params.turnId ?? params.turn?.id;
+    if (!threadId && turnId) {
+      for (const [candidateThreadId, activeTurnId] of this.activeTurnByThread.entries()) {
+        if (String(activeTurnId) === String(turnId)) {
+          threadId = candidateThreadId;
+          break;
+        }
+      }
+    }
+    if (!threadId) return;
+    this.activeTurnByThread.delete(String(threadId));
+    setTimeout(() => this.drainQueuedTurn(threadId).catch((error) => {
+      console.warn('[codex-control] failed to start queued turn:', error.message);
+    }), 250);
+  }
+
+  async drainQueuedTurn(threadId) {
+    const key = String(threadId);
+    if (this.queueDrainByThread.has(key)) return;
+    const current = this.queuedMessagesByThread.get(key) ?? [];
+    const next = current[0];
+    if (!next) return;
+    this.queueDrainByThread.add(key);
+    try {
+      const remaining = current.slice(1);
+      if (remaining.length) this.queuedMessagesByThread.set(key, remaining);
+      else this.queuedMessagesByThread.delete(key);
+      this.rememberEvent('turn/dequeued', { threadId, turnId: next.turnId });
+      this.broadcast('codex-notification', { method: 'turn/dequeued', params: { threadId, turnId: next.turnId } });
+      await this.resumeThread(threadId);
+      await this.startTurn(threadId, next.input, next.overrides ?? {});
+    } finally {
+      this.queueDrainByThread.delete(key);
+    }
   }
 
   async activeTurnId(threadId) {
@@ -735,6 +819,14 @@ function compactTurn(turn, steeredMessages = []) {
   };
 }
 
+function compactQueuedMessage(message) {
+  return {
+    turnId: message.turnId,
+    text: message.text,
+    createdAt: message.createdAt,
+  };
+}
+
 
 function shouldStoreEvent(method) {
   const lower = String(method ?? '').toLowerCase();
@@ -762,6 +854,7 @@ function eventMessage(method, params = {}) {
   if (lower.includes('thread/archive')) return 'Archived session';
   if (lower.includes('thread/unarchive')) return 'Restored session';
   if (lower.includes('thread/start')) return 'Opened session';
+  if (lower.includes('turn/dequeued')) return 'Started queued follow-up';
   if (lower.includes('turn/queued')) return 'Queued follow-up prompt';
   if (lower.includes('turn/steer') || lower.includes('steered')) return 'Steered active turn';
   if (lower.includes('interrupt') || lower.includes('interrupted')) return 'Stopped active turn';
@@ -874,6 +967,78 @@ function mediaFromDataUrl(dataUrl) {
   return { type: 'image', src: `/api/media/${id}`, contentType };
 }
 
+function mediaFromLocalImagePath(filePath) {
+  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
+  if (!existsSync(target)) return null;
+  const ext = path.extname(target).toLowerCase();
+  const contentType = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+  }[ext];
+  if (!contentType) return null;
+  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target });
+  return { type: 'image', src: `/api/media/${id}`, contentType };
+}
+
+function localFileContentType(filePath) {
+  const ext = path.extname(String(filePath ?? '')).toLowerCase();
+  return {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.m4v': 'video/mp4',
+    '.cpp': 'text/plain; charset=utf-8',
+    '.h': 'text/plain; charset=utf-8',
+    '.hpp': 'text/plain; charset=utf-8',
+    '.cs': 'text/plain; charset=utf-8',
+    '.js': 'text/plain; charset=utf-8',
+    '.mjs': 'text/plain; charset=utf-8',
+    '.ts': 'text/plain; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.log': 'text/plain; charset=utf-8',
+    '.diff': 'text/plain; charset=utf-8',
+    '.patch': 'text/plain; charset=utf-8',
+    '.pdf': 'application/pdf',
+  }[ext] ?? 'application/octet-stream';
+}
+
+function mediaFromLocalFilePath(filePath) {
+  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
+  if (!existsSync(target)) return null;
+  const contentType = localFileContentType(target);
+  const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
+  if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
+  return { src: `/api/media/${id}`, contentType };
+}
+
+function rewriteMarkdownLocalFileLinks(text) {
+  return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
+    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
+    const media = mediaFromLocalFilePath(target);
+    const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
+    return media ? `![${alt}](${media.src}?kind=${kind})` : match;
+  }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
+    const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
+    const media = mediaFromLocalFilePath(target);
+    return media ? `[${label}](${media.src})` : match;
+  });
+}
+
 function compactContentParts(content) {
   if (!Array.isArray(content)) return [];
   return content.map((part) => {
@@ -900,7 +1065,7 @@ function compactItem(item) {
   const base = { id: item.id, type };
 
   if (type === 'userMessage') return { ...base, text: truncate(textFromContent(item.content)), parts: compactContentParts(item.content) };
-  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(item.text) };
+  if (type === 'agentMessage') return { ...base, phase: item.phase, text: truncate(rewriteMarkdownLocalFileLinks(item.text)) };
   if (type === 'commandExecution') {
     return {
       ...base,
@@ -1134,12 +1299,34 @@ async function readTurnPayload(req) {
     return {
       cwd: parts.find((part) => part.name === 'cwd')?.data.toString('utf8') ?? '',
       prompt: parts.find((part) => part.name === 'prompt')?.data.toString('utf8') ?? '',
+      approvalPolicy: parts.find((part) => part.name === 'approvalPolicy')?.data.toString('utf8') ?? '',
+      sandboxPolicy: parts.find((part) => part.name === 'sandboxPolicy')?.data.toString('utf8') ?? '',
+      networkAccess: parts.find((part) => part.name === 'networkAccess')?.data.toString('utf8') ?? '',
       files: parts.filter((part) => part.name === 'files' && part.filename),
     };
   }
 
   const body = await readJson(req);
   return { ...body, prompt: String(body.prompt ?? ''), files: [] };
+}
+
+function turnOverridesFromPayload(payload = {}) {
+  const overrides = {};
+  const approvalPolicy = String(payload.approvalPolicy ?? '').trim();
+  if (['onRequest', 'unlessTrusted', 'never'].includes(approvalPolicy)) {
+    overrides.approvalPolicy = approvalPolicy;
+  }
+
+  const sandboxPolicy = String(payload.sandboxPolicy ?? '').trim();
+  if (sandboxPolicy === 'readOnly') {
+    overrides.sandboxPolicy = { type: 'readOnly' };
+  } else if (sandboxPolicy === 'workspaceWrite') {
+    overrides.sandboxPolicy = { type: 'workspaceWrite', networkAccess: payload.networkAccess === 'true' || payload.networkAccess === true || payload.networkAccess === 'on' };
+  } else if (sandboxPolicy === 'dangerFullAccess') {
+    overrides.sandboxPolicy = { type: 'dangerFullAccess' };
+  }
+
+  return overrides;
 }
 
 async function buildTurnInput(threadId, thread, reqOrPayload) {
@@ -1187,6 +1374,94 @@ function sendError(res, status, error) {
   sendJson(res, status, { error: error.message ?? String(error) });
 }
 
+async function probeDirectoryWrite(dir) {
+  const targetDir = String(dir ?? '').trim();
+  if (!targetDir) return { canWrite: false, reason: 'No directory available.' };
+  const probePath = path.join(targetDir, `.codex-control-probe-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    await writeFile(probePath, 'probe');
+    await rm(probePath, { force: true });
+    return { canWrite: true };
+  } catch (error) {
+    return { canWrite: false, reason: error.message };
+  }
+}
+
+function resolveGitPath(baseDir, value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return path.isAbsolute(text) ? path.normalize(text) : path.resolve(baseDir, text);
+}
+
+function parentRepoFromGitCommonDir(gitCommonDir) {
+  const normalized = path.normalize(String(gitCommonDir ?? ''));
+  const lower = normalized.toLowerCase();
+  const marker = `${path.sep}.git${path.sep}`;
+  const index = lower.indexOf(marker);
+  if (index !== -1) return normalized.slice(0, index);
+  if (lower.endsWith(`${path.sep}.git`)) return path.dirname(normalized);
+  return '';
+}
+
+async function runtimeDiagnostics() {
+  await codex.ready;
+  const git = {
+    branch: '',
+    worktreeRoot: rootDir,
+    gitCommonDir: '',
+    repositoryRoot: '',
+    status: '',
+    error: '',
+  };
+
+  try {
+    const [branch, worktreeRoot, gitCommonDir, status] = await Promise.all([
+      execFileText('git', ['-C', rootDir, 'branch', '--show-current']).catch(() => ''),
+      execFileText('git', ['-C', rootDir, 'rev-parse', '--show-toplevel']).catch(() => rootDir),
+      execFileText('git', ['-C', rootDir, 'rev-parse', '--git-common-dir']).catch(() => ''),
+      execFileText('git', ['-C', rootDir, 'status', '--short', '--branch']).catch(() => ''),
+    ]);
+    git.branch = branch.trim();
+    git.worktreeRoot = resolveGitPath(rootDir, worktreeRoot.trim()) || rootDir;
+    git.gitCommonDir = resolveGitPath(rootDir, gitCommonDir.trim());
+    git.repositoryRoot = parentRepoFromGitCommonDir(git.gitCommonDir) || git.worktreeRoot;
+    git.status = status.trim();
+  } catch (error) {
+    git.error = error.message;
+  }
+
+  const worktreeAccess = await probeDirectoryWrite(rootDir);
+  const gitAccess = git.gitCommonDir ? await probeDirectoryWrite(git.gitCommonDir) : { canWrite: false, reason: 'Git common directory was not found.' };
+  const canCommit = Boolean(worktreeAccess.canWrite && gitAccess.canWrite);
+  const recommendedWritableRoot = git.repositoryRoot || git.worktreeRoot || rootDir;
+
+  return {
+    server: {
+      cwd: process.cwd(),
+      rootDir,
+      publicDir,
+      host,
+      port,
+      codexHome: codex.codexHome,
+      node: process.version,
+    },
+    git,
+    access: {
+      worktree: worktreeAccess,
+      gitMetadata: gitAccess,
+      canCommit,
+      recommendedWritableRoot,
+      currentSessionCanChangePermissions: false,
+      permissionMutationSupported: true,
+      permissionMutationReason: 'Codex app-server supports sandbox and approval overrides on turn/start for future normal turns. It does not apply those overrides to an already-running turn or to this separate agent session sandbox.',
+    },
+    commands: {
+      restartFromCmd: `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'node\\s+src\\\\server\\.mjs|node\\s+src/server\\.mjs' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask -TaskName 'codex-control'; Start-Sleep -Seconds 3; (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:${port}/api/health').StatusCode"`,
+      neededAccess: `Allow this Codex session to write: ${recommendedWritableRoot}`,
+    },
+  };
+}
+
 function sendMedia(res, id) {
   const media = mediaById.get(id);
   if (!media) {
@@ -1197,7 +1472,12 @@ function sendMedia(res, id) {
   res.writeHead(200, {
     'content-type': media.contentType,
     'cache-control': 'no-store',
+    ...(media.filename ? { 'content-disposition': `inline; filename="${String(media.filename).replace(/"/g, '')}"` } : {}),
   });
+  if (media.filePath) {
+    createReadStream(media.filePath).pipe(res);
+    return;
+  }
   res.end(media.data);
 }
 
@@ -1230,6 +1510,11 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/health') {
       const info = await codex.ready;
       sendJson(res, 200, { ok: true, ...info });
+      return;
+    }
+
+    if (url.pathname === '/api/runtime' && req.method === 'GET') {
+      sendJson(res, 200, await runtimeDiagnostics());
       return;
     }
 
@@ -1275,11 +1560,12 @@ const server = createServer(async (req, res) => {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
       if (!cwd) throw new Error('Choose a worktree first.');
-      const started = await codex.startThread(cwd);
+      const overrides = turnOverridesFromPayload(payload);
+      const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;
       if (threadId && (String(payload.prompt ?? '').trim() || payload.files?.length)) {
         const input = await buildTurnInput(threadId, started.thread, payload);
-        await codex.startTurn(threadId, input);
+        await codex.startTurn(threadId, input, overrides);
       }
       sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
       return;
@@ -1308,9 +1594,28 @@ const server = createServer(async (req, res) => {
     if (turnMatch && req.method === 'POST') {
       const threadId = decodeURIComponent(turnMatch[1]);
       const data = await codex.readThread(threadId);
-      const input = await buildTurnInput(threadId, data.thread, req);
+      const payload = await readTurnPayload(req);
+      const input = await buildTurnInput(threadId, data.thread, payload);
       await codex.resumeThread(threadId);
-      sendJson(res, 200, await codex.startTurn(threadId, input));
+      sendJson(res, 200, await codex.startTurn(threadId, input, turnOverridesFromPayload(payload)));
+      return;
+    }
+
+    const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move)$/);
+    if (queueActionMatch && req.method === 'POST') {
+      const threadId = decodeURIComponent(queueActionMatch[1]);
+      const queuedId = decodeURIComponent(queueActionMatch[2]);
+      const action = queueActionMatch[3];
+      if (action === 'remove') {
+        sendJson(res, 200, { removed: codex.removeQueuedMessage(threadId, queuedId) });
+        return;
+      }
+      if (action === 'move') {
+        const body = await readJson(req);
+        sendJson(res, 200, { queuedMessages: codex.moveQueuedMessage(threadId, queuedId, body.direction) });
+        return;
+      }
+      sendJson(res, 200, await codex.steerQueuedMessage(threadId, queuedId));
       return;
     }
 
