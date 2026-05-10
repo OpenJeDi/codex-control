@@ -98,85 +98,54 @@
       </label>
       <div id="newWorktreeHint" class="hint"></div>
 
-      <section class="session-settings" aria-label="Run settings">
-        <div class="settings-head">
-          <div>
-            <span class="settings-eyebrow">Run settings</span>
-            <strong>Defaults for this session</strong>
-            <p>These only override Codex config when you change them. The dot fills when a value is explicit.</p>
-          </div>
-          <span class="settings-legend"><span class="setting-source inherited" aria-hidden="true"></span> inherited</span>
-        </div>
+      <div class="model-controls modal-model-controls" title="Applies to the first normal turn in this session and is remembered locally.">
+        <span class="setting-source inherited" data-source-for="model" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="model" aria-label="Model" data-explicit="0">
+          <option value="gpt-5.5">gpt-5.5</option>
+          <option value="gpt-5.4">gpt-5.4</option>
+          <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+          <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+          <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+          <option value="gpt-5.2">gpt-5.2</option>
+        </select>
+        <input type="hidden" name="model" value="">
+        <span class="setting-source inherited" data-source-for="effort" title="Using config value" aria-hidden="true"></span>
+        <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="0">
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+        </select>
+        <input type="hidden" name="effort" value="">
+      </div>
 
-        <div class="settings-grid">
-          <div class="settings-card">
-            <div class="settings-card-head">
-              <strong>Model</strong>
-              <span>Controls quality, speed, and reasoning budget.</span>
-            </div>
-            <div class="model-controls modal-model-controls settings-control-row" title="Applies to the first normal turn in this session and is remembered locally.">
-              <label class="settings-field">
-                <span><span class="setting-source inherited" data-source-for="model" title="Using config value" aria-hidden="true"></span> Model</span>
-                <select data-setting-kind="model" aria-label="Model" data-explicit="0">
-                  <option value="gpt-5.5">gpt-5.5</option>
-                  <option value="gpt-5.4">gpt-5.4</option>
-                  <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-                  <option value="gpt-5.3-codex">gpt-5.3-codex</option>
-                  <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
-                  <option value="gpt-5.2">gpt-5.2</option>
-                </select>
-              </label>
-              <input type="hidden" name="model" value="">
-              <label class="settings-field">
-                <span><span class="setting-source inherited" data-source-for="effort" title="Using config value" aria-hidden="true"></span> Effort</span>
-                <select data-setting-kind="effort" aria-label="Thinking level" data-explicit="0">
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
-                </select>
-              </label>
-              <input type="hidden" name="effort" value="">
-            </div>
-          </div>
-
-          <div class="settings-card settings-card-strong">
-            <div class="settings-card-head">
-              <strong>Permissions</strong>
-              <span>Controls filesystem access, approvals, and network use.</span>
-            </div>
-            <div class="permission-controls modal-permissions settings-control-row permission-settings-row" title="Applies to the first normal turn in this session and is remembered locally.">
-              <label class="settings-field">
-                <span><span class="setting-source inherited" data-source-for="permission" title="Using config value" aria-hidden="true"></span> Access preset</span>
-                <select name="permissionPreset" aria-label="Permission preset" data-explicit="0">
-                  <option value="review">review only</option>
-                  <option value="normal">normal coding</option>
-                  <option value="trusted">trusted local</option>
-                  <option value="full">full autonomous</option>
-                </select>
-              </label>
-              <input type="hidden" name="sandboxPolicy" value="">
-              <input type="hidden" name="approvalPolicy" value="">
-              <label class="network-toggle settings-network-toggle"><input type="checkbox" name="networkAccess" value="true"> allow network</label>
-              <details class="permission-advanced">
-                <summary>Advanced permission policy</summary>
-                <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
-                  <option value="readOnly">read only</option>
-                  <option value="workspaceWrite">workspace write</option>
-                  <option value="dangerFullAccess">danger full access</option>
-                </select>
-                <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
-                  <option value="untrusted">untrusted only</option>
-                  <option value="on-failure">on failure</option>
-                  <option value="on-request">on request</option>
-                  <option value="granular">granular</option>
-                  <option value="never">never approve</option>
-                </select>
-              </details>
-            </div>
-          </div>
-        </div>
-      </section>
+      <div class="permission-controls modal-permissions" title="Applies to the first normal turn in this session and is remembered locally.">
+        <span class="setting-source inherited" data-source-for="permission" title="Using config value" aria-hidden="true"></span>
+        <select name="permissionPreset" aria-label="Permission preset" data-explicit="0">
+          <option value="review">review only</option>
+          <option value="normal">normal coding</option>
+          <option value="trusted">trusted local</option>
+          <option value="full">full autonomous</option>
+        </select>
+        <input type="hidden" name="sandboxPolicy" value="">
+        <input type="hidden" name="approvalPolicy" value="">
+        <label class="network-toggle"><input type="checkbox" name="networkAccess" value="true"> network</label>
+        <details class="permission-advanced">
+          <summary>Advanced</summary>
+          <select name="sandboxPolicyRaw" aria-label="Advanced sandbox policy">
+            <option value="readOnly">read only</option>
+            <option value="workspaceWrite">workspace write</option>
+            <option value="dangerFullAccess">danger full access</option>
+          </select>
+          <select name="approvalPolicyRaw" aria-label="Advanced approval policy">
+            <option value="untrusted">untrusted only</option>
+            <option value="on-failure">on failure</option>
+            <option value="on-request">on request</option>
+            <option value="granular">granular</option>
+            <option value="never">never approve</option>
+          </select>
+        </details>
+      </div>
 
       <label>
         First prompt <span class="muted">optional</span>
@@ -274,8 +243,8 @@
     <form class="modal-card runtime-card-shell" method="dialog">
       <div class="modal-head">
         <div>
-          <strong>Runtime access</strong>
-          <p>Shows what this Codex Control server and the current agent session can actually do.</p>
+          <strong>Settings and access</strong>
+          <p>Check whether Codex Control can write files, commit changes, serve media, and recover from permission issues.</p>
         </div>
         <button id="closeRuntime" type="button" title="Close">Close</button>
       </div>
