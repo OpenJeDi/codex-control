@@ -373,9 +373,10 @@ class CodexAppServer {
     };
   }
 
-  async startThread(cwd, overrides = {}) {
+  async startThread(cwd = '', overrides = {}) {
     await this.ready;
-    const result = await this.request('thread/start', { cwd }, 30000, { allowRetry: false });
+    const params = String(cwd ?? '').trim() ? { cwd: String(cwd).trim() } : {};
+    const result = await this.request('thread/start', params, 30000, { allowRetry: false });
     if (result.thread) {
       this.rememberStatus('thread/started', { thread: result.thread });
       this.rememberPermissionSettings(result.thread.id, overrides);
@@ -2046,9 +2047,10 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/threads' && req.method === 'POST') {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
-      if (!cwd) throw new Error('Choose a worktree first.');
-      const existing = await existingThreadForCwd(cwd);
-      if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
+      if (cwd) {
+        const existing = await existingThreadForCwd(cwd);
+        if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
+      }
       const overrides = turnOverridesFromPayload(payload);
       const started = await codex.startThread(cwd, overrides);
       const threadId = started.thread?.id;

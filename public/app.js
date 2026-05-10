@@ -29,6 +29,7 @@ const repoUrlInput = document.querySelector('#repoUrlInput');
 const repoDisplayPreview = document.querySelector('#repoDisplayPreview');
 const repoValuePreview = document.querySelector('#repoValuePreview');
 const repoError = document.querySelector('#repoError');
+const newSessionNameInput = document.querySelector('#newSessionNameInput');
 const newWorktreeSelect = document.querySelector('#newWorktreeSelect');
 const newWorktreeHint = document.querySelector('#newWorktreeHint');
 const createWorktreeButton = document.querySelector('#createWorktreeButton');
@@ -1045,10 +1046,14 @@ async function startSessionFromSelectedWorktree(event) {
   saveModelDefaults(modelPref);
   const formData = new FormData(form);
   const cwd = newWorktreeSelect.value;
-  if (!cwd) return window.alert('Choose a worktree first.');
-  const selected = newSessionWorktrees.find((item) => item.path === cwd);
-  if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
-  formData.set('cwd', cwd);
+  const sessionName = newSessionNameInput.value.trim();
+  if (cwd === '__chat__') formData.delete('cwd');
+  else {
+    if (!cwd) return window.alert('Choose a worktree first, or choose chat-only.');
+    const selected = newSessionWorktrees.find((item) => item.path === cwd);
+    if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
+    formData.set('cwd', cwd);
+  }
 
   const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
@@ -1061,6 +1066,7 @@ async function startSessionFromSelectedWorktree(event) {
     });
     if (data.thread?.id) saveThreadPermission(data.thread.id, pref);
     if (data.thread?.id) saveThreadModel(data.thread.id, modelPref);
+    if (data.thread?.id && sessionName) await jsonApi(`/api/threads/${encodeURIComponent(data.thread.id)}/name`, { name: sessionName });
     form.reset();
     newSessionDialog.close();
     if (data.thread?.id) await loadDetail(data.thread.id);
@@ -1081,6 +1087,7 @@ function openCreateWorktreeDialog() {
   if (!sourcePath) return window.alert('Choose a source worktree first.');
   currentWorktreePlan = null;
   createWorktreeForm.reset();
+  worktreeNameInput.value = newSessionNameInput.value.trim();
   planSource.textContent = compactPath(sourcePath);
   planBranch.textContent = '-';
   planWorktree.textContent = '-';
@@ -1088,6 +1095,7 @@ function openCreateWorktreeDialog() {
   planError.textContent = '';
   confirmCreateWorktree.disabled = true;
   createWorktreeDialog.showModal();
+  if (worktreeNameInput.value.trim()) updateWorktreePlan();
   worktreeNameInput.focus();
 }
 
@@ -1228,16 +1236,22 @@ async function loadNewSessionWorktrees(preferredPath = '') {
       return;
     }
 
+    const chatOption = '<option value="__chat__">No worktree - chat only</option>';
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
       const attached = Boolean(item.session);
       const sessionName = item.session?.name || item.session?.id || 'session';
       const suffix = attached ? ` — has session: ${sessionName}` : '';
       return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} — ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
-    }).join('');
+    }).join('') + chatOption;
     const available = worktrees.filter((item) => !item.session);
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath && !option.disabled)) newWorktreeSelect.value = preferredPath;
-    else if (available[0]) newWorktreeSelect.value = available[0].path;
+    else {
+      const suggested = suggestedWorktreeForSessionName();
+      if (suggested) newWorktreeSelect.value = suggested.path;
+      else if (available[0]) newWorktreeSelect.value = available[0].path;
+      else newWorktreeSelect.value = '__chat__';
+    }
     createWorktreeButton.disabled = false;
     createWorktreeButton.title = 'Create a new worktree from this repo.';
     updateNewSessionStartState();
@@ -1251,16 +1265,46 @@ async function loadNewSessionWorktrees(preferredPath = '') {
 }
 
 function selectedWorktreeSourcePath() {
-  return newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '';
+  return newWorktreeSelect.value === '__chat__' ? (newSessionWorktrees.find((item) => item.path)?.path || '') : (newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '');
 }
 
 function updateNewSessionStartState() {
   const startButton = newSessionForm.querySelector('button[type="submit"]');
   if (!startButton) return;
+  if (newWorktreeSelect.value === '__chat__') {
+    startButton.disabled = false;
+    startButton.title = '';
+    newWorktreeHint.textContent = 'This will start a chat-only Codex session without a repository worktree.';
+    return;
+  }
   const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value);
   const canStart = Boolean(selected && !selected.session);
   startButton.disabled = !canStart;
   startButton.title = canStart ? '' : 'Choose a worktree without an existing session, or create a new worktree.';
+}
+
+function slugFromSessionName(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function suggestedWorktreeForSessionName() {
+  const slug = slugFromSessionName(newSessionNameInput.value);
+  if (!slug) return null;
+  return newSessionWorktrees.find((item) => !item.session && (
+    String(item.branch ?? '').toLowerCase().includes(slug) ||
+    compactPath(item.path).toLowerCase().includes(slug)
+  )) ?? null;
+}
+
+function applySessionNameWorktreeSuggestion() {
+  const suggested = suggestedWorktreeForSessionName();
+  if (suggested) {
+    newWorktreeSelect.value = suggested.path;
+    newWorktreeHint.textContent = `Selected matching worktree: ${compactPath(suggested.path)}`;
+  } else if (newSessionNameInput.value.trim()) {
+    createWorktreeButton.title = 'No matching free worktree found. Create one from this session name.';
+  }
+  updateNewSessionStartState();
 }
 
 function renderBranchGroups(sessions) {
@@ -2346,6 +2390,7 @@ cancelAddRepo.addEventListener('click', () => addRepoDialog.close());
 runtimeButton.addEventListener('click', openRuntimeDialog);
 closeRuntime.addEventListener('click', () => runtimeDialog.close());
 newRepoSelect.addEventListener('change', () => loadNewSessionWorktrees());
+newSessionNameInput.addEventListener('input', applySessionNameWorktreeSuggestion);
 newWorktreeSelect.addEventListener('change', updateNewSessionStartState);
 newSessionForm.addEventListener('submit', startSessionFromSelectedWorktree);
 createWorktreeButton.addEventListener('click', openCreateWorktreeDialog);

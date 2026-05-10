@@ -760,6 +760,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 .modal-head { justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
 .modal-head p, .hint, .muted { color: var(--muted); font-size: 12px; }
 .modal-card label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.modal-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
 .modal-actions { justify-content: flex-end; }
 .modal-actions span { display: none; }
 .image-lightbox {
