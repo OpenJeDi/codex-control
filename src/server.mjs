@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, watch } from 'node:fs';
+import { existsSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -1094,6 +1094,7 @@ function mediaFromLocalFilePath(filePath) {
   const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
   if (!/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return null;
   if (!existsSync(target)) return null;
+  try { if (!statSync(target).isFile()) return null; } catch { return null; }
   const contentType = localFileContentType(target);
   const id = createHash('sha256').update(target).digest('hex').slice(0, 40);
   if (!mediaById.has(id)) mediaById.set(id, { contentType, filePath: target, filename: path.basename(target) });
@@ -1114,7 +1115,15 @@ function rewriteMarkdownLocalFileLinks(text) {
 }
 
 function rewriteLocalFileReferences(text, cwd = '') {
-  return rewriteBareLocalFilePaths(rewriteMarkdownLocalFileLinks(text), cwd);
+  return rewriteBareLocalFilePaths(rewriteInlineCodeLocalFileLinks(rewriteMarkdownLocalFileLinks(text), cwd), cwd);
+}
+
+function rewriteInlineCodeLocalFileLinks(text, cwd = '') {
+  return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
+    const resolved = resolveMentionedFilePath(rawPath, cwd);
+    const media = resolved ? mediaFromLocalFilePath(resolved) : null;
+    return media ? `[${rawPath}](${media.src})` : match;
+  });
 }
 
 function resolveMentionedFilePath(rawPath, cwd = '') {
