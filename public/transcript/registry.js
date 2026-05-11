@@ -42,7 +42,7 @@ function createRenderer(registry, context = {}) {
     const rendered = entries.map((entry) => {
       const parser = registry.find((candidate) => candidate.canRender(entry));
       if (!parser) return '';
-      return parser.render(entry, context, entry);
+      return parser.render(entry, context, entry.renderOptions ? { ...entry, ...entry.renderOptions } : entry);
     });
     return rendered.filter(Boolean).join('\n');
   };

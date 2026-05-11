@@ -2225,7 +2225,7 @@ function renderItem(item, options = {}) {
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
-  const customItem = renderSingleItem(item);
+  const customItem = renderSingleItem(item, options);
   const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
@@ -2246,6 +2246,7 @@ function renderItem(item, options = {}) {
       label,
       body,
       preview,
+      options,
     });
   }
 
@@ -2262,9 +2263,9 @@ function renderItemBlocks(item) {
   return renderer(blocks);
 }
 
-function renderSingleItem(item) {
+function renderSingleItem(item, options = {}) {
   const parser = getTranscriptItemRenderer();
-  return parser([item]);
+  return parser([{ ...item, renderOptions: options }]);
 }
 
 function scheduleLoadSessions() {

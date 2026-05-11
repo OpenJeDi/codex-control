@@ -7,7 +7,7 @@ export function renderSessionImageFigure(src, caption = '', alt = 'Session image
   return `<figure class="session-image"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt || caption || 'Session image')}" loading="lazy"><figcaption>${escapeHtml(caption || 'image')}</figcaption></figure>`;
 }
 
-export function renderCompactDetailsItem({ type = 'item', label = 'Item', body = '', preview = '', className = '' } = {}) {
+export function renderCompactDetailsItem({ type = 'item', label = 'Item', body = '', preview = '', className = '', options = {} } = {}) {
   const itemClass = ['item', type, 'compact-item', className].filter(Boolean).join(' ');
   const summary = preview || String(body ?? '').slice(0, 220).replace(/\s+/g, ' ').trim() || 'expand details';
   return `<article class="${escapeAttribute(itemClass)}">
@@ -16,7 +16,7 @@ export function renderCompactDetailsItem({ type = 'item', label = 'Item', body =
         <span>${escapeHtml(label)}</span>
         <small>${escapeHtml(summary)}</small>
       </summary>
-      <pre>${escapeHtml(body)}</pre>
+      <pre>${renderCodeBlockContent(body, options)}</pre>
     </details>
   </article>`;
 }

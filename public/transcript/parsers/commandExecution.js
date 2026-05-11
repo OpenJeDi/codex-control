@@ -18,6 +18,7 @@ export const commandExecutionParser = {
         label,
         body,
         preview,
+        options: renderContext,
       });
     }
 
