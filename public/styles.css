@@ -110,6 +110,11 @@ button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
   font-size: 20px;
   line-height: 1;
 }
+.compact-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
 .sidebar-footer {
   display: flex;
   align-items: center;
