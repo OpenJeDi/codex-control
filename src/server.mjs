@@ -1236,11 +1236,11 @@ async function worktreesForRepo(repoUrl) {
   const repo = String(repoUrl ?? '').trim();
   if (!repo) return { repo, worktrees: [], source: 'none' };
 
-  const threads = await hydrateThreadCwds(await codex.listThreads({ includeArchived: true, limit: 500 }));
-  const threadsByCwd = await threadsByCwdMap(threads);
-  const candidates = threads
-    .filter((thread) => includes(`${thread.gitInfo?.originUrl ?? ''}\n${thread.cwd ?? ''}\n${thread.path ?? ''}`, repo))
-    .map((thread) => thread.cwd)
+  const listedThreads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  const repoThreads = await hydrateThreadCwds(listedThreads.filter((thread) => threadMatchesRepo(thread, repo)), { concurrency: 2 });
+  const threadsByCwd = await threadsByCwdMap([...listedThreads.map(withRememberedCwd), ...repoThreads]);
+  const candidates = repoThreads
+    .map((thread) => thread.cwd || rememberedThreadCwd(thread))
     .filter(Boolean);
 
   try {
@@ -1273,8 +1273,8 @@ async function worktreesForRepo(repoUrl) {
   return { repo, worktrees: [], source: 'not-found' };
 }
 
-async function hydrateThreadCwds(threads = []) {
-  return mapConcurrent(threads ?? [], 8, async (thread) => {
+async function hydrateThreadCwds(threads = [], { concurrency = 4 } = {}) {
+  return mapConcurrent(threads ?? [], concurrency, async (thread) => {
     if (thread?.cwd || !thread?.id) return thread;
     const remembered = codex.cwdByThread.get(String(thread.id));
     if (remembered) return { ...thread, cwd: remembered };
@@ -1289,6 +1289,19 @@ async function hydrateThreadCwds(threads = []) {
       return thread;
     }
   });
+}
+
+function rememberedThreadCwd(thread = {}) {
+  return thread?.cwd || (thread?.id ? codex.cwdByThread.get(String(thread.id)) : '') || '';
+}
+
+function withRememberedCwd(thread = {}) {
+  const remembered = rememberedThreadCwd(thread);
+  return remembered && !thread.cwd ? { ...thread, cwd: remembered } : thread;
+}
+
+function threadMatchesRepo(thread = {}, repo = '') {
+  return includes(`${thread.gitInfo?.originUrl ?? ''}\n${rememberedThreadCwd(thread)}\n${thread.path ?? ''}`, repo);
 }
 
 async function mapConcurrent(items = [], limit = 8, mapper) {
@@ -1334,8 +1347,20 @@ async function threadsByCwdMap(threads = []) {
 async function existingThreadForCwd(cwd) {
   const key = await pathKey(cwd);
   if (!key) return null;
-  const threads = await hydrateThreadCwds(await codex.listThreads({ includeArchived: true, limit: 500 }));
-  for (const thread of threads) {
+  const listedThreads = await codex.listThreads({ includeArchived: true, limit: 500 });
+  for (const thread of listedThreads.map(withRememberedCwd)) {
+    if (await pathKey(thread.cwd) === key) return thread;
+  }
+  let repo = '';
+  try {
+    repo = (await gitInfoForCwd(cwd)).originUrl || '';
+  } catch {
+    repo = '';
+  }
+  const candidates = repo
+    ? listedThreads.filter((thread) => threadMatchesRepo(thread, repo))
+    : [];
+  for (const thread of await hydrateThreadCwds(candidates, { concurrency: 2 })) {
     if (await pathKey(thread.cwd) === key) return thread;
   }
   return null;
