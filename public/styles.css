@@ -176,12 +176,14 @@ body.sidebar-collapsed .splitter { display: none; }
   z-index: 5;
 }
 .filters > * { min-width: 0; }
-.repo-row, .search-row {
+.repo-row,
+.search-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   min-width: 0;
 }
+.repo-row { grid-template-columns: minmax(0, 1fr); }
+.search-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .search-row input { min-width: 0; }
 #filterToggle.active { border-color: var(--accent-2); color: var(--text); }
 .filter-drawer {
@@ -495,9 +497,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: ui
 @media (prefers-reduced-motion: reduce) { .busy-dots span { animation: none; } }
 .empty, .error { padding: 18px; color: var(--muted); }
 .error { color: var(--danger); }
-.repo-row { grid-template-columns: minmax(0, 1fr); }
-
-
 .detail-panel { display: grid; overflow: hidden; min-height: 0; }
 .detail-host { min-height: 0; height: 100%; display: grid; overflow: hidden; }
 .detail-shell { min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
