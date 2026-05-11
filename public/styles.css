@@ -96,7 +96,6 @@ button:disabled:hover { border-color: var(--line); background: var(--panel-2); }
 }
 .sidebar-actions button { padding: 5px 8px; }
 .sidebar-actions strong { line-height: 1; }
-.sidebar-primary { margin-left: auto; }
 .compact-icon {
   display: inline-grid;
   place-items: center;

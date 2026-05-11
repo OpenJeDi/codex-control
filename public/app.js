@@ -1292,7 +1292,7 @@ function updateRepoOptions(repos) {
 }
 
 function syncNewSessionRepoOptions() {
-  const previous = newRepoSelect.value || repoFilter.value;
+  const previous = repoFilter.value || savedSelectedRepo() || newRepoSelect.value;
   const options = [...repoFilter.options]
     .filter((option) => option.value && option.value !== '__add_repo__')
     .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.textContent)}</option>`);
@@ -1303,6 +1303,8 @@ function syncNewSessionRepoOptions() {
 async function openNewSessionDialog() {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   syncNewSessionRepoOptions();
+  const selectedRepo = repoFilter.value || savedSelectedRepo();
+  if (selectedRepo && [...newRepoSelect.options].some((option) => option.value === selectedRepo)) newRepoSelect.value = selectedRepo;
   if (!newRepoSelect.value && newRepoSelect.options[0]) newRepoSelect.value = newRepoSelect.options[0].value;
   applyPermissionPreference(newSessionForm, permissionDefaults());
   applyModelPreference(newSessionForm, modelDefaults());
