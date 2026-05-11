@@ -2181,15 +2181,30 @@ function sendMedia(res, id) {
     res.end('Media not found');
     return;
   }
-  res.writeHead(200, {
+  const headers = {
     'content-type': media.contentType,
     'cache-control': 'no-store',
     ...(media.filename ? { 'content-disposition': `inline; filename="${String(media.filename).replace(/"/g, '')}"` } : {}),
-  });
+  };
   if (media.filePath) {
-    createReadStream(media.filePath).pipe(res);
+    const stream = createReadStream(media.filePath);
+    stream.once('open', () => {
+      res.writeHead(200, headers);
+      stream.pipe(res);
+    });
+    stream.once('error', (error) => {
+      const status = error?.code === 'ENOENT' ? 404 : 500;
+      console.error(`Media stream failed for ${media.filePath}: ${error?.message || error}`);
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(status === 404 ? 'Media file no longer exists.' : 'Media file is unavailable.');
+    });
     return;
   }
+  res.writeHead(200, headers);
   res.end(media.data);
 }
 
