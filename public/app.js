@@ -62,6 +62,7 @@ const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
 let debounceTimer = null;
 let detailRefreshTimer = null;
+let detailRequestSeq = 0;
 let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 let newSessionWorktrees = [];
@@ -1469,6 +1470,7 @@ function refreshAgeIndicators() {
 async function loadDetail(id, { quiet = false } = {}) {
   if (quiet && activeId && id !== activeId) return;
   if (!quiet) clearTimeout(detailRefreshTimer);
+  const requestSeq = ++detailRequestSeq;
   const previousId = activeId;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
@@ -1496,6 +1498,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
+    if (requestSeq !== detailRequestSeq || id !== activeId) return;
     detailEl.className = 'detail-host';
     const rendered = renderDetail(data);
     const patched = preservePromptForm && patchDetailPreservingComposer(rendered, data.thread);
@@ -1528,6 +1531,7 @@ async function loadDetail(id, { quiet = false } = {}) {
       updateJumpBottomButton(scroller);
     });
   } catch (error) {
+    if (requestSeq !== detailRequestSeq || id !== activeId) return;
     detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }

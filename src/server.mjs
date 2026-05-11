@@ -429,7 +429,8 @@ class CodexAppServer {
     return { ...result, thread: await this.decorateThread(result.thread) };
   }
 
-  async startTurn(threadId, input, overrides = {}) {
+  async startTurn(threadId, input, overrides = {}, options = {}) {
+    const { resumeBeforeStart = false } = options;
     await this.ready;
     let activeBefore = null;
     try {
@@ -446,6 +447,7 @@ class CodexAppServer {
       return { queued: true, threadId, turn: { id: queued.turnId, status: 'queued' } };
     }
 
+    if (resumeBeforeStart) await this.resumeThread(threadId);
     this.rememberPermissionSettings(threadId, overrides);
     const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
@@ -1931,6 +1933,15 @@ async function buildTurnInput(threadId, thread, reqOrPayload) {
   return input;
 }
 
+async function threadContextForTurnInput(threadId, payload = {}) {
+  const key = String(threadId);
+  const thread = { id: key, cwd: codex.cwdByThread.get(key) || '' };
+  if ((payload.files?.length ?? 0) && !thread.cwd) {
+    return codex.readThreadMetadata(threadId);
+  }
+  return thread;
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(status, {
@@ -2349,7 +2360,7 @@ const server = createServer(async (req, res) => {
         const input = await buildTurnInput(threadId, started.thread, payload);
         await codex.startTurn(threadId, input, overrides);
       }
-      sendJson(res, 200, { ...started, thread: threadId ? (await codex.readThread(threadId)).thread : started.thread });
+      sendJson(res, 200, { ...started, thread: threadId ? await codex.readThreadMetadata(threadId) : started.thread });
       return;
     }
 
@@ -2379,11 +2390,10 @@ const server = createServer(async (req, res) => {
     if (turnMatch && req.method === 'POST') {
       requireWriteAccess();
       const threadId = decodeURIComponent(turnMatch[1]);
-      const data = await codex.readThread(threadId);
       const payload = await readTurnPayload(req);
-      const input = await buildTurnInput(threadId, data.thread, payload);
-      await codex.resumeThread(threadId);
-      sendJson(res, 200, await codex.startTurn(threadId, input, turnOverridesFromPayload(payload)));
+      const thread = await threadContextForTurnInput(threadId, payload);
+      const input = await buildTurnInput(threadId, thread, payload);
+      sendJson(res, 200, await codex.startTurn(threadId, input, turnOverridesFromPayload(payload), { resumeBeforeStart: true }));
       return;
     }
 
@@ -2410,8 +2420,9 @@ const server = createServer(async (req, res) => {
     if (steerMatch && req.method === 'POST') {
       requireWriteAccess();
       const threadId = decodeURIComponent(steerMatch[1]);
-      const data = await codex.readThread(threadId);
-      const input = await buildTurnInput(threadId, data.thread, req);
+      const payload = await readTurnPayload(req);
+      const thread = await threadContextForTurnInput(threadId, payload);
+      const input = await buildTurnInput(threadId, thread, payload);
       sendJson(res, 200, await codex.steerTurn(threadId, input));
       return;
     }
