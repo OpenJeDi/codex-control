@@ -49,6 +49,7 @@ class CodexAppServer {
     this.permissionSettingsByThread = new Map();
     this.cwdByThread = new Map();
     this.attachmentsByTurn = new Map();
+    this.submittedMessagesByTurn = new Map();
     this.queueDrainByThread = new Set();
     this.steeredMessagesByThread = new Map();
     this.eventsByThread = new Map();
@@ -88,6 +89,7 @@ class CodexAppServer {
         this.pending.clear();
         this.broadcast('codex-exit', { code, signal });
         this.activeTurnByThread.clear();
+        this.submittedMessagesByTurn.clear();
         if (!this.isManualShutdown) {
           setTimeout(() => {
             this.restartCodex().catch((error) => {
@@ -394,7 +396,13 @@ class CodexAppServer {
     if (resolvedThread?.cwd) this.cwdByThread.set(key, resolvedThread.cwd);
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(turn, this.steeredMessagesByThread.get(key) ?? [], this.attachmentsForTurn(key, turn.id), resolvedThread?.cwd, mediaPolicy)),
+      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(
+        this.applySubmittedMessageFallback(key, turn),
+        this.steeredMessagesByThread.get(key) ?? [],
+        this.attachmentsForTurn(key, turn.id),
+        resolvedThread?.cwd,
+        mediaPolicy,
+      )),
       queuedMessages: (this.queuedMessagesByThread.get(key) ?? []).map((message) => normalizeQueuedMessage(message, mediaPolicy)),
       permissionSettings,
       events: this.eventsByThread.get(key) ?? [],
@@ -451,6 +459,7 @@ class CodexAppServer {
     this.rememberPermissionSettings(threadId, overrides);
     const result = await this.request('turn/start', { threadId, input, ...overrides }, 30000, { allowRetry: false });
     const turnId = result.turn?.id;
+    if (turnId) this.rememberSubmittedMessage(threadId, turnId, input);
     if (turnId) this.rememberTurnAttachments(threadId, turnId, attachmentsFromInput(input, this.mediaPolicyForThreadId(threadId)));
     if (turnId) this.activeTurnByThread.set(String(threadId), String(turnId));
     this.rememberStatus('turn/started', { threadId, turnId, status: { type: 'running' } });
@@ -597,6 +606,26 @@ class CodexAppServer {
   attachmentsForTurn(threadId, turnId) {
     if (!threadId || !turnId) return [];
     return this.attachmentsByTurn.get(String(threadId))?.get(String(turnId)) ?? [];
+  }
+
+  rememberSubmittedMessage(threadId, turnId, input) {
+    if (!threadId || !turnId) return;
+    const key = String(threadId);
+    const current = this.submittedMessagesByTurn.get(key) ?? new Map();
+    current.set(String(turnId), { input, text: truncate(textFromContent(input), 1600), createdAt: Date.now() });
+    this.submittedMessagesByTurn.set(key, current);
+  }
+
+  applySubmittedMessageFallback(threadId, turn) {
+    const fallback = this.submittedMessagesByTurn.get(String(threadId))?.get(String(turn?.id));
+    if (!fallback || (turn.items ?? []).some((item) => item.type === 'userMessage')) return turn;
+    return {
+      ...turn,
+      items: [
+        { type: 'userMessage', content: fallback.input },
+        ...(turn.items ?? []),
+      ],
+    };
   }
 
   addQueuedMessage(threadId, input, overrides = {}) {
