@@ -62,7 +62,11 @@ const cancelNewSession = document.querySelector('#cancelNewSession');
 let activeId = null;
 let debounceTimer = null;
 let detailRefreshTimer = null;
+let detailStateTimer = null;
 let detailRequestSeq = 0;
+let detailStateInFlight = false;
+let activeDetailState = null;
+let lastDetailLoadAt = 0;
 let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 let newSessionWorktrees = [];
@@ -90,6 +94,7 @@ const EVENT_LIST_REFRESH_DELAY_MS = 2000;
 const EVENT_DETAIL_REFRESH_DELAY_MS = 1000;
 const BACKGROUND_LIST_REFRESH_DELAY_MS = 10000;
 const HIDDEN_EVENT_REFRESH_DELAY_MS = 15000;
+const DETAIL_FULL_REFRESH_STALE_MS = 5000;
 const PERMISSION_PRESETS = [
   { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
   { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
@@ -1185,6 +1190,55 @@ async function loadSessions({ quiet = false } = {}) {
   }
 }
 
+function detailStateFromDetailData(data = {}) {
+  const turns = Array.isArray(data.turns) ? data.turns : [];
+  const latestTurn = turns[turns.length - 1] ?? {};
+  return {
+    threadId: String(data.thread?.id ?? activeId ?? ''),
+    updatedAt: Number(data.thread?.updatedAt ?? 0),
+    status: statusLabel(data.thread),
+    activeTurnId: isBusyThread(data.thread) ? String(latestTurn.id ?? '') : '',
+    turnCount: turns.length,
+    lastTurnId: String(latestTurn.id ?? ''),
+    lastTurnStatus: String(latestTurn.status ?? ''),
+    queuedCount: Array.isArray(data.queuedMessages) ? data.queuedMessages.length : 0,
+    pendingCount: turns.filter((turn) => String(turn.status ?? '').toLowerCase() === 'starting').length,
+    eventCount: Array.isArray(data.events) ? data.events.length : 0,
+  };
+}
+
+function detailStateFromStateResponse(data = {}) {
+  const state = data.state ?? {};
+  return {
+    threadId: String(state.threadId ?? data.thread?.id ?? activeId ?? ''),
+    updatedAt: Number(state.updatedAt ?? data.thread?.updatedAt ?? 0),
+    status: state.status || statusLabel(data.thread),
+    activeTurnId: String(state.activeTurnId ?? ''),
+    queuedCount: Number(state.queuedCount ?? 0),
+    pendingCount: Number(state.pendingCount ?? 0),
+    eventCount: Number(state.eventCount ?? 0),
+  };
+}
+
+function patchActiveDetailStatus(thread) {
+  if (!thread || String(thread.id ?? '') !== String(activeId ?? '')) return;
+  const status = statusLabel(thread);
+  const css = statusClass(thread);
+  const badge = detailEl.querySelector('.session-summary .badge.status');
+  if (badge) {
+    badge.textContent = status;
+    badge.className = `badge status ${css}`;
+  }
+  const title = detailEl.querySelector('.session-summary h2');
+  if (title) title.textContent = thread.name || '(unnamed)';
+  const detail = detailEl.querySelector('.detail-shell .detail');
+  if (!detail) return;
+  const currentBusy = detail.querySelector('.busy-indicator');
+  const nextBusy = renderBusyIndicator(thread);
+  if (nextBusy && !currentBusy) detail.insertAdjacentHTML('beforeend', nextBusy);
+  else if (!nextBusy && currentBusy) currentBusy.remove();
+}
+
 async function startSessionFromSelectedWorktree(event) {
   event.preventDefault();
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
@@ -1554,6 +1608,8 @@ async function loadDetail(id, { quiet = false } = {}) {
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     if (requestSeq !== detailRequestSeq || id !== activeId) return;
+    activeDetailState = detailStateFromDetailData(data);
+    lastDetailLoadAt = Date.now();
     detailEl.className = 'detail-host';
     const rendered = renderDetail(data);
     const patched = preservePromptForm && patchDetailPreservingComposer(rendered, data.thread);
@@ -2401,13 +2457,49 @@ function scheduleBackgroundLoadSessions() {
 
 function scheduleDetailRefresh(id = activeId, delay = 500) {
   if (!id) return;
+  clearTimeout(detailStateTimer);
   clearTimeout(detailRefreshTimer);
   detailRefreshTimer = setTimeout(() => loadDetail(id, { quiet: true }), delay);
 }
 
+function shouldReloadDetailFromState(previous, next, thread) {
+  if (!previous) return true;
+  if (next.activeTurnId !== previous.activeTurnId) return true;
+  if (next.queuedCount !== previous.queuedCount) return true;
+  if (next.pendingCount !== previous.pendingCount) return true;
+  if (next.status !== previous.status && (previous.status !== 'idle' || next.status !== 'idle')) return true;
+  if (detailEl.querySelector('.session-meta')?.open && next.eventCount !== previous.eventCount) return true;
+  if (isBusyThread(thread) && Date.now() - lastDetailLoadAt > DETAIL_FULL_REFRESH_STALE_MS) return true;
+  return false;
+}
+
+async function refreshActiveDetailState(id = activeId) {
+  const key = String(id ?? '');
+  detailStateTimer = null;
+  if (!key || key !== activeId || detailStateInFlight) return;
+  detailStateInFlight = true;
+  try {
+    const data = await api(`/api/threads/${encodeURIComponent(key)}/state`);
+    if (key !== activeId) return;
+    const nextState = detailStateFromStateResponse(data);
+    const previousState = activeDetailState;
+    activeDetailState = { ...previousState, ...nextState };
+    if (data.thread) {
+      replaceSessionRow(data.thread);
+      patchActiveDetailStatus(data.thread);
+    }
+    if (shouldReloadDetailFromState(previousState, nextState, data.thread)) scheduleDetailRefresh(key, 0);
+  } catch {
+    scheduleDetailRefresh(key, document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_DETAIL_REFRESH_DELAY_MS);
+  } finally {
+    detailStateInFlight = false;
+  }
+}
+
 function scheduleEventDetailRefresh(id = activeId) {
   const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_DETAIL_REFRESH_DELAY_MS;
-  scheduleDetailRefresh(id, delay);
+  clearTimeout(detailStateTimer);
+  detailStateTimer = setTimeout(() => refreshActiveDetailState(id), delay);
 }
 
 function connectEvents() {
@@ -2460,6 +2552,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   clearTimeout(eventListRefreshTimer);
   clearTimeout(backgroundListRefreshTimer);
+  clearTimeout(detailStateTimer);
   if (activeId) scheduleDetailRefresh(activeId, 100);
   scheduleLoadSessions();
 });

@@ -429,6 +429,24 @@ class CodexAppServer {
     return thread;
   }
 
+  async threadState(threadId) {
+    const key = String(threadId);
+    const thread = await this.readThreadMetadata(threadId);
+    const status = normalizeStatus(thread?.status);
+    return {
+      thread,
+      state: {
+        threadId: key,
+        updatedAt: thread?.updatedAt ?? 0,
+        status: status.type,
+        activeTurnId: this.activeTurnByThread.get(key) ?? '',
+        queuedCount: (this.queuedMessagesByThread.get(key) ?? []).length,
+        pendingCount: (this.pendingMessagesByThread.get(key) ?? []).length,
+        eventCount: (this.eventsByThread.get(key) ?? []).length,
+      },
+    };
+  }
+
   async startThread(cwd = '', overrides = {}) {
     await this.ready;
     const params = String(cwd ?? '').trim() ? { cwd: String(cwd).trim() } : {};
@@ -2414,6 +2432,12 @@ const server = createServer(async (req, res) => {
     if (threadSummaryMatch && req.method === 'GET') {
       const thread = await codex.readThreadMetadata(decodeURIComponent(threadSummaryMatch[1]));
       sendJson(res, 200, { thread });
+      return;
+    }
+
+    const threadStateMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/state$/);
+    if (threadStateMatch && req.method === 'GET') {
+      sendJson(res, 200, await codex.threadState(decodeURIComponent(threadStateMatch[1])));
       return;
     }
 
