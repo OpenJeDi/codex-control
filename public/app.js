@@ -67,6 +67,7 @@ let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 let newSessionWorktrees = [];
 let visibleThreadIds = new Set();
+let eventListRefreshTimer = null;
 let backgroundListRefreshTimer = null;
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
@@ -82,6 +83,10 @@ const MODEL_DEFAULTS_KEY = 'codex-control.modelDefaults';
 const MODEL_THREADS_KEY = 'codex-control.modelThreads';
 const MODEL_OPTIONS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2'];
 const EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const EVENT_LIST_REFRESH_DELAY_MS = 2000;
+const EVENT_DETAIL_REFRESH_DELAY_MS = 1000;
+const BACKGROUND_LIST_REFRESH_DELAY_MS = 10000;
+const HIDDEN_EVENT_REFRESH_DELAY_MS = 15000;
 const PERMISSION_PRESETS = [
   { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
   { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
@@ -2328,9 +2333,16 @@ function scheduleLoadSessions() {
   debounceTimer = setTimeout(() => loadSessions({ quiet: true }), 180);
 }
 
+function scheduleEventLoadSessions() {
+  clearTimeout(eventListRefreshTimer);
+  const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_LIST_REFRESH_DELAY_MS;
+  eventListRefreshTimer = setTimeout(() => loadSessions({ quiet: true }), delay);
+}
+
 function scheduleBackgroundLoadSessions() {
   clearTimeout(backgroundListRefreshTimer);
-  backgroundListRefreshTimer = setTimeout(() => loadSessions({ quiet: true }), 5000);
+  const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : BACKGROUND_LIST_REFRESH_DELAY_MS;
+  backgroundListRefreshTimer = setTimeout(() => loadSessions({ quiet: true }), delay);
 }
 
 function scheduleDetailRefresh(id = activeId, delay = 500) {
@@ -2339,16 +2351,21 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
   detailRefreshTimer = setTimeout(() => loadDetail(id, { quiet: true }), delay);
 }
 
+function scheduleEventDetailRefresh(id = activeId) {
+  const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_DETAIL_REFRESH_DELAY_MS;
+  scheduleDetailRefresh(id, delay);
+}
+
 function connectEvents() {
   const refreshForThread = (threadId) => {
     const id = String(threadId ?? '');
     if (id && id === activeId) {
-      scheduleLoadSessions();
-      scheduleDetailRefresh(activeId, 150);
+      scheduleEventLoadSessions();
+      scheduleEventDetailRefresh(activeId);
       return;
     }
     if (id && visibleThreadIds.has(id)) {
-      scheduleLoadSessions();
+      scheduleEventLoadSessions();
       return;
     }
     scheduleBackgroundLoadSessions();
@@ -2359,8 +2376,8 @@ function connectEvents() {
       scheduleBackgroundLoadSessions();
       return;
     }
-    if (activeId && ids.includes(activeId)) scheduleDetailRefresh(activeId, 150);
-    if (ids.some((id) => id === activeId || visibleThreadIds.has(id))) scheduleLoadSessions();
+    if (activeId && ids.includes(activeId)) scheduleEventDetailRefresh(activeId);
+    if (ids.some((id) => id === activeId || visibleThreadIds.has(id))) scheduleEventLoadSessions();
     else scheduleBackgroundLoadSessions();
   };
   const events = new EventSource('/api/events');
@@ -2380,6 +2397,14 @@ function connectEvents() {
     events.close();
   });
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  clearTimeout(eventListRefreshTimer);
+  clearTimeout(backgroundListRefreshTimer);
+  if (activeId) scheduleDetailRefresh(activeId, 100);
+  scheduleLoadSessions();
+});
 
 function setDrawerOpen(open) {
   filterDrawer.hidden = !open;
