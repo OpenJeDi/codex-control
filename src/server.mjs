@@ -2410,6 +2410,13 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const threadSummaryMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/summary$/);
+    if (threadSummaryMatch && req.method === 'GET') {
+      const thread = await codex.readThreadMetadata(decodeURIComponent(threadSummaryMatch[1]));
+      sendJson(res, 200, { thread });
+      return;
+    }
+
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
       sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await cachedFacets() });

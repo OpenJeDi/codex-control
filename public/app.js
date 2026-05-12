@@ -67,6 +67,9 @@ let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 let newSessionWorktrees = [];
 let visibleThreadIds = new Set();
+let visibleThreadsById = new Map();
+const rowRefreshTimers = new Map();
+const rowRefreshInFlight = new Set();
 let eventListRefreshTimer = null;
 let backgroundListRefreshTimer = null;
 
@@ -1158,6 +1161,7 @@ async function loadSessions({ quiet = false } = {}) {
     const { data, facets } = await api(`/api/threads?${params}`);
     updateRepoOptions(facets?.repos ?? []);
     visibleThreadIds = new Set(data.map((thread) => String(thread.id)));
+    visibleThreadsById = new Map(data.map((thread) => [String(thread.id), thread]));
 
     if (!data.length) {
       const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';
@@ -1168,7 +1172,7 @@ async function loadSessions({ quiet = false } = {}) {
     listEl.innerHTML = filters.groupBranch.checked ? renderBranchGroups(data) : data.map(renderSession).join('');
     refreshAgeIndicators();
     for (const button of listEl.querySelectorAll('.session')) {
-      button.addEventListener('click', () => loadDetail(button.dataset.id));
+      bindSessionRow(button);
     }
     if (!activeId) {
       const savedId = savedActiveSession();
@@ -2333,6 +2337,56 @@ function scheduleLoadSessions() {
   debounceTimer = setTimeout(() => loadSessions({ quiet: true }), 180);
 }
 
+function bindSessionRow(row) {
+  row?.addEventListener('click', () => loadDetail(row.dataset.id));
+}
+
+function replaceSessionRow(thread) {
+  const id = String(thread?.id ?? '');
+  if (!id || !visibleThreadIds.has(id)) return false;
+  const current = listEl.querySelector(`.session[data-id="${CSS.escape(id)}"]`);
+  if (!current) return false;
+  visibleThreadsById.set(id, thread);
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = renderSession(thread).trim();
+  const next = wrapper.firstElementChild;
+  if (!next) return false;
+  bindSessionRow(next);
+  next.classList.toggle('active', id === activeId);
+  current.replaceWith(next);
+  refreshAgeIndicators();
+  return true;
+}
+
+async function refreshSessionRow(id) {
+  const key = String(id ?? '');
+  rowRefreshTimers.delete(key);
+  if (!key || !visibleThreadIds.has(key) || rowRefreshInFlight.has(key)) return;
+  rowRefreshInFlight.add(key);
+  try {
+    const { thread } = await api(`/api/threads/${encodeURIComponent(key)}/summary`);
+    if (!replaceSessionRow(thread)) scheduleBackgroundLoadSessions();
+  } catch {
+    scheduleBackgroundLoadSessions();
+  } finally {
+    rowRefreshInFlight.delete(key);
+  }
+}
+
+function scheduleSessionRowRefresh(id, delay = EVENT_LIST_REFRESH_DELAY_MS) {
+  const key = String(id ?? '');
+  if (!key) {
+    scheduleBackgroundLoadSessions();
+    return;
+  }
+  if (!visibleThreadIds.has(key)) {
+    scheduleBackgroundLoadSessions();
+    return;
+  }
+  clearTimeout(rowRefreshTimers.get(key));
+  rowRefreshTimers.set(key, setTimeout(() => refreshSessionRow(key), delay));
+}
+
 function scheduleEventLoadSessions() {
   clearTimeout(eventListRefreshTimer);
   const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_LIST_REFRESH_DELAY_MS;
@@ -2360,12 +2414,12 @@ function connectEvents() {
   const refreshForThread = (threadId) => {
     const id = String(threadId ?? '');
     if (id && id === activeId) {
-      scheduleEventLoadSessions();
+      scheduleSessionRowRefresh(id);
       scheduleEventDetailRefresh(activeId);
       return;
     }
     if (id && visibleThreadIds.has(id)) {
-      scheduleEventLoadSessions();
+      scheduleSessionRowRefresh(id);
       return;
     }
     scheduleBackgroundLoadSessions();
@@ -2377,8 +2431,12 @@ function connectEvents() {
       return;
     }
     if (activeId && ids.includes(activeId)) scheduleEventDetailRefresh(activeId);
-    if (ids.some((id) => id === activeId || visibleThreadIds.has(id))) scheduleEventLoadSessions();
-    else scheduleBackgroundLoadSessions();
+    const visibleIds = ids.filter((id) => id === activeId || visibleThreadIds.has(id));
+    if (visibleIds.length) {
+      for (const id of visibleIds) scheduleSessionRowRefresh(id);
+    } else {
+      scheduleBackgroundLoadSessions();
+    }
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
