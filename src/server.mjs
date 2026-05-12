@@ -46,6 +46,7 @@ class CodexAppServer {
     this.statusByThread = new Map();
     this.activeTurnByThread = new Map();
     this.queuedMessagesByThread = new Map();
+    this.pendingMessagesByThread = new Map();
     this.permissionSettingsByThread = new Map();
     this.cwdByThread = new Map();
     this.attachmentsByTurn = new Map();
@@ -89,6 +90,7 @@ class CodexAppServer {
         this.pending.clear();
         this.broadcast('codex-exit', { code, signal });
         this.activeTurnByThread.clear();
+        this.pendingMessagesByThread.clear();
         this.submittedMessagesByTurn.clear();
         if (!this.isManualShutdown) {
           setTimeout(() => {
@@ -394,9 +396,17 @@ class CodexAppServer {
     const permissionSettings = this.permissionSettingsByThread.get(key) ?? {};
     const mediaPolicy = mediaPolicyForThread(resolvedThread, permissionSettings);
     if (resolvedThread?.cwd) this.cwdByThread.set(key, resolvedThread.cwd);
+    const pendingTurns = (this.pendingMessagesByThread.get(key) ?? []).map((message) => ({
+      id: message.turnId,
+      status: 'starting',
+      startedAt: message.createdAt / 1000,
+      model: message.overrides?.model || '',
+      effort: message.overrides?.effort || '',
+      items: [{ type: 'userMessage', content: message.input }],
+    }));
     return {
       thread: resolvedModel ? { ...resolvedThread, model: resolvedModel, modelSource } : { ...resolvedThread, modelSource },
-      turns: resolvedTurns.map((turn) => transcriptNormalizer.normalizeTranscriptTurn(
+      turns: [...resolvedTurns, ...pendingTurns].map((turn) => transcriptNormalizer.normalizeTranscriptTurn(
         this.applySubmittedMessageFallback(key, turn),
         this.steeredMessagesByThread.get(key) ?? [],
         this.attachmentsForTurn(key, turn.id),
@@ -614,6 +624,23 @@ class CodexAppServer {
     const current = this.submittedMessagesByTurn.get(key) ?? new Map();
     current.set(String(turnId), { input, text: truncate(textFromContent(input), 1600), createdAt: Date.now() });
     this.submittedMessagesByTurn.set(key, current);
+  }
+
+  rememberPendingMessage(threadId, input, overrides = {}) {
+    const key = String(threadId);
+    const turnId = `pending-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const current = this.pendingMessagesByThread.get(key) ?? [];
+    const message = { turnId, input, overrides, text: truncate(textFromContent(input), 1600), createdAt: Date.now() };
+    this.pendingMessagesByThread.set(key, [...current, message].slice(-5));
+    this.broadcast('codex-notification', { method: 'turn/pending', params: { threadId, turnId } });
+    return message;
+  }
+
+  removePendingMessage(threadId, turnId) {
+    const key = String(threadId);
+    const next = (this.pendingMessagesByThread.get(key) ?? []).filter((message) => message.turnId !== turnId);
+    if (next.length) this.pendingMessagesByThread.set(key, next);
+    else this.pendingMessagesByThread.delete(key);
   }
 
   applySubmittedMessageFallback(threadId, turn) {
@@ -2422,7 +2449,13 @@ const server = createServer(async (req, res) => {
       const payload = await readTurnPayload(req);
       const thread = await threadContextForTurnInput(threadId, payload);
       const input = await buildTurnInput(threadId, thread, payload);
-      sendJson(res, 200, await codex.startTurn(threadId, input, turnOverridesFromPayload(payload), { resumeBeforeStart: true }));
+      const overrides = turnOverridesFromPayload(payload);
+      const pending = codex.rememberPendingMessage(threadId, input, overrides);
+      try {
+        sendJson(res, 200, await codex.startTurn(threadId, input, overrides, { resumeBeforeStart: true }));
+      } finally {
+        codex.removePendingMessage(threadId, pending.turnId);
+      }
       return;
     }
 

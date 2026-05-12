@@ -1896,7 +1896,7 @@ async function submitPrompt(event, id) {
       return json;
     });
     clearPromptComposerContent(form);
-    scheduleDetailRefresh(id, 700);
+    scheduleDetailRefresh(id, 80);
     scheduleLoadSessions();
   } catch (error) {
     window.alert(error.message);
