@@ -66,10 +66,14 @@ let detailRequestSeq = 0;
 let isDraggingSidebar = false;
 let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 let newSessionWorktrees = [];
+let visibleThreadIds = new Set();
+let backgroundListRefreshTimer = null;
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
+const SELECTED_REPO_TAB_KEY = 'codex-control.selectedRepo.tab';
 const ACTIVE_SESSION_KEY = 'codex-control.activeSession';
+const ACTIVE_SESSION_TAB_KEY = 'codex-control.activeSession.tab';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
@@ -438,23 +442,33 @@ function customRepos() {
 }
 
 function savedSelectedRepo() {
-  return localStorage.getItem(SELECTED_REPO_KEY) || '';
+  return sessionStorage.getItem(SELECTED_REPO_TAB_KEY) || localStorage.getItem(SELECTED_REPO_KEY) || '';
 }
 
 function saveSelectedRepo(repo) {
   const value = String(repo ?? '').trim();
-  if (value) localStorage.setItem(SELECTED_REPO_KEY, value);
-  else localStorage.removeItem(SELECTED_REPO_KEY);
+  if (value) {
+    sessionStorage.setItem(SELECTED_REPO_TAB_KEY, value);
+    localStorage.setItem(SELECTED_REPO_KEY, value);
+  } else {
+    sessionStorage.removeItem(SELECTED_REPO_TAB_KEY);
+    localStorage.removeItem(SELECTED_REPO_KEY);
+  }
 }
 
 function savedActiveSession() {
-  return localStorage.getItem(ACTIVE_SESSION_KEY) || '';
+  return sessionStorage.getItem(ACTIVE_SESSION_TAB_KEY) || localStorage.getItem(ACTIVE_SESSION_KEY) || '';
 }
 
 function saveActiveSession(id) {
   const value = String(id ?? '').trim();
-  if (value) localStorage.setItem(ACTIVE_SESSION_KEY, value);
-  else localStorage.removeItem(ACTIVE_SESSION_KEY);
+  if (value) {
+    sessionStorage.setItem(ACTIVE_SESSION_TAB_KEY, value);
+    localStorage.setItem(ACTIVE_SESSION_KEY, value);
+  } else {
+    sessionStorage.removeItem(ACTIVE_SESSION_TAB_KEY);
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+  }
 }
 
 function saveCustomRepos(repos) {
@@ -1138,6 +1152,7 @@ async function loadSessions({ quiet = false } = {}) {
     const params = paramsFromForm();
     const { data, facets } = await api(`/api/threads?${params}`);
     updateRepoOptions(facets?.repos ?? []);
+    visibleThreadIds = new Set(data.map((thread) => String(thread.id)));
 
     if (!data.length) {
       const archiveHint = filters.archived.checked ? '' : ' Try "search archive" in Filters for older sessions.';
@@ -2313,6 +2328,11 @@ function scheduleLoadSessions() {
   debounceTimer = setTimeout(() => loadSessions({ quiet: true }), 180);
 }
 
+function scheduleBackgroundLoadSessions() {
+  clearTimeout(backgroundListRefreshTimer);
+  backgroundListRefreshTimer = setTimeout(() => loadSessions({ quiet: true }), 5000);
+}
+
 function scheduleDetailRefresh(id = activeId, delay = 500) {
   if (!id) return;
   clearTimeout(detailRefreshTimer);
@@ -2321,8 +2341,27 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
 
 function connectEvents() {
   const refreshForThread = (threadId) => {
-    scheduleLoadSessions();
-    if (threadId === activeId) scheduleDetailRefresh(activeId, 150);
+    const id = String(threadId ?? '');
+    if (id && id === activeId) {
+      scheduleLoadSessions();
+      scheduleDetailRefresh(activeId, 150);
+      return;
+    }
+    if (id && visibleThreadIds.has(id)) {
+      scheduleLoadSessions();
+      return;
+    }
+    scheduleBackgroundLoadSessions();
+  };
+  const refreshForThreads = (threadIds = []) => {
+    const ids = threadIds.map((id) => String(id ?? '')).filter(Boolean);
+    if (!ids.length) {
+      scheduleBackgroundLoadSessions();
+      return;
+    }
+    if (activeId && ids.includes(activeId)) scheduleDetailRefresh(activeId, 150);
+    if (ids.some((id) => id === activeId || visibleThreadIds.has(id))) scheduleLoadSessions();
+    else scheduleBackgroundLoadSessions();
   };
   const events = new EventSource('/api/events');
   events.addEventListener('codex-notification', (event) => {
@@ -2334,7 +2373,7 @@ function connectEvents() {
   events.addEventListener('threads-changed', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const threadIds = Array.isArray(payload.threadIds) ? payload.threadIds : [];
-    refreshForThread(threadIds.includes(activeId) ? activeId : payload.threadId);
+    refreshForThreads(threadIds.length ? threadIds : [payload.threadId]);
   });
   events.addEventListener('codex-exit', () => {
     statusEl.textContent = 'Codex app-server exited';

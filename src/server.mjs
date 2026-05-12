@@ -26,6 +26,8 @@ const maxBodyBytes = 75 * 1024 * 1024;
 const mediaById = new Map();
 const gitInfoByCwd = new Map();
 const defaultSourceKinds = ['cli', 'vscode', 'appServer', 'unknown'];
+const facetsCacheTtlMs = 30_000;
+let facetsCache = { at: 0, value: null, promise: null };
 const transcriptMedia = createTranscriptMediaHelpers({
   mediaById,
   canServeLocalFilePath,
@@ -1718,19 +1720,33 @@ function filterThreads(threads, params) {
 
 function listThreadOptionsFromParams(params) {
   const q = (params.get('q') ?? params.get('query') ?? '').trim();
-  const repo = (params.get('repo') ?? '').trim();
-  const branch = (params.get('branch') ?? '').trim();
   const source = (params.get('source') ?? '').trim();
   const cwd = (params.get('cwd') ?? '').trim();
   const includeArchived = params.get('archived') === '1' || params.get('archived') === 'true';
-  const needsLocalFilterWindow = Boolean(repo || branch);
+  const limit = Math.min(Math.max(Number(params.get('limit') || 200) || 200, 1), 500);
   return {
     includeArchived,
-    limit: needsLocalFilterWindow ? 500 : params.get('limit'),
+    limit,
     searchTerm: q,
     cwd,
     sourceKinds: source ? [source] : defaultSourceKinds,
   };
+}
+
+async function cachedFacets() {
+  const now = Date.now();
+  if (facetsCache.value && now - facetsCache.at < facetsCacheTtlMs) return facetsCache.value;
+  if (facetsCache.promise) return facetsCache.promise;
+  facetsCache.promise = (async () => {
+    const facetThreads = await codex.listThreads({ includeArchived: true, limit: 500, sourceKinds: defaultSourceKinds });
+    const value = await buildFacets(facetThreads);
+    facetsCache = { at: Date.now(), value, promise: null };
+    return value;
+  })().catch((error) => {
+    facetsCache.promise = null;
+    throw error;
+  });
+  return facetsCache.promise;
 }
 
 async function buildFacets(threads) {
@@ -2396,8 +2412,7 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await codex.listThreads(listThreadOptionsFromParams(url.searchParams));
-      const facetThreads = await codex.listThreads({ includeArchived: true, limit: 500, sourceKinds: defaultSourceKinds });
-      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await buildFacets(facetThreads) });
+      sendJson(res, 200, { data: filterThreads(threads, url.searchParams), facets: await cachedFacets() });
       return;
     }
 
