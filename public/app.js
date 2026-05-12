@@ -1230,7 +1230,7 @@ function patchActiveDetailStatus(thread) {
     badge.className = `badge status ${css}`;
   }
   const title = detailEl.querySelector('.session-summary h2');
-  if (title) title.textContent = thread.name || '(unnamed)';
+  if (title && thread.name !== undefined) title.textContent = thread.name || '(unnamed)';
   const detail = detailEl.querySelector('.detail-shell .detail');
   if (!detail) return;
   const currentBusy = detail.querySelector('.busy-indicator');
@@ -2402,9 +2402,15 @@ function replaceSessionRow(thread) {
   if (!id || !visibleThreadIds.has(id)) return false;
   const current = listEl.querySelector(`.session[data-id="${CSS.escape(id)}"]`);
   if (!current) return false;
-  visibleThreadsById.set(id, thread);
+  const previous = visibleThreadsById.get(id) ?? {};
+  const merged = {
+    ...previous,
+    ...thread,
+    gitInfo: { ...(previous.gitInfo ?? {}), ...(thread.gitInfo ?? {}) },
+  };
+  visibleThreadsById.set(id, merged);
   const wrapper = document.createElement('div');
-  wrapper.innerHTML = renderSession(thread).trim();
+  wrapper.innerHTML = renderSession(merged).trim();
   const next = wrapper.firstElementChild;
   if (!next) return false;
   bindSessionRow(next);
@@ -2462,6 +2468,29 @@ function scheduleDetailRefresh(id = activeId, delay = 500) {
   detailRefreshTimer = setTimeout(() => loadDetail(id, { quiet: true }), delay);
 }
 
+function threadPatchFromEvent(method, params = {}) {
+  const thread = params.thread && typeof params.thread === 'object' ? params.thread : null;
+  const threadId = params.threadId ?? params.id ?? thread?.id;
+  if (!threadId) return null;
+  const lower = String(method ?? '').toLowerCase();
+  const status = params.status ?? thread?.status;
+  const patch = { ...(thread ?? {}), id: String(threadId) };
+  if (params.name !== undefined) patch.name = params.name;
+  if (status) patch.status = status;
+  else if (lower.includes('turn/started') || lower.includes('turnstarted') || lower.includes('turn/pending') || lower.includes('turn/queued')) patch.status = { type: 'running' };
+  else if (lower.includes('turn/completed') || lower.includes('turncompleted') || lower.includes('turn/idle') || lower.includes('interrupt')) patch.status = { type: 'idle' };
+  return Object.keys(patch).length > 1 ? patch : null;
+}
+
+function eventNeedsActiveDetailState(method, params = {}) {
+  const lower = String(method ?? '').toLowerCase();
+  const turnId = params.turnId ?? params.turn?.id;
+  if (lower.includes('thread/name') || lower.includes('thread/archive') || lower.includes('thread/unarchive')) return false;
+  if (!turnId && params.status && !lower.includes('turn')) return false;
+  if (!turnId && params.thread && !lower.includes('turn')) return false;
+  return true;
+}
+
 function shouldReloadDetailFromState(previous, next, thread) {
   if (!previous) return true;
   if (next.activeTurnId !== previous.activeTurnId) return true;
@@ -2503,29 +2532,46 @@ function scheduleEventDetailRefresh(id = activeId) {
 }
 
 function connectEvents() {
-  const refreshForThread = (threadId) => {
+  const refreshForThread = (threadId, eventInfo = {}) => {
     const id = String(threadId ?? '');
+    const patch = threadPatchFromEvent(eventInfo.method, eventInfo.params);
     if (id && id === activeId) {
-      scheduleSessionRowRefresh(id);
-      scheduleEventDetailRefresh(activeId);
+      if (patch) {
+        replaceSessionRow(patch);
+        patchActiveDetailStatus(patch);
+      } else {
+        scheduleSessionRowRefresh(id);
+      }
+      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(activeId);
       return;
     }
     if (id && visibleThreadIds.has(id)) {
-      scheduleSessionRowRefresh(id);
+      if (patch) replaceSessionRow(patch);
+      else scheduleSessionRowRefresh(id);
       return;
     }
     scheduleBackgroundLoadSessions();
   };
-  const refreshForThreads = (threadIds = []) => {
+  const refreshForThreads = (threadIds = [], eventInfo = {}) => {
     const ids = threadIds.map((id) => String(id ?? '')).filter(Boolean);
     if (!ids.length) {
       scheduleBackgroundLoadSessions();
       return;
     }
-    if (activeId && ids.includes(activeId)) scheduleEventDetailRefresh(activeId);
+    const patch = threadPatchFromEvent(eventInfo.method, eventInfo.params);
+    if (activeId && ids.includes(activeId)) {
+      if (patch) {
+        replaceSessionRow(patch);
+        patchActiveDetailStatus(patch);
+      }
+      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(activeId);
+    }
     const visibleIds = ids.filter((id) => id === activeId || visibleThreadIds.has(id));
     if (visibleIds.length) {
-      for (const id of visibleIds) scheduleSessionRowRefresh(id);
+      for (const id of visibleIds) {
+        if (patch && String(patch.id) === id) replaceSessionRow(patch);
+        else scheduleSessionRowRefresh(id);
+      }
     } else {
       scheduleBackgroundLoadSessions();
     }
@@ -2535,12 +2581,12 @@ function connectEvents() {
     const payload = JSON.parse(event.data || '{}');
     const params = payload.params ?? {};
     const threadId = params.threadId ?? params.thread?.id;
-    refreshForThread(threadId);
+    refreshForThread(threadId, { method: payload.method, params });
   });
   events.addEventListener('threads-changed', (event) => {
     const payload = JSON.parse(event.data || '{}');
     const threadIds = Array.isArray(payload.threadIds) ? payload.threadIds : [];
-    refreshForThreads(threadIds.length ? threadIds : [payload.threadId]);
+    refreshForThreads(threadIds.length ? threadIds : [payload.threadId], { method: payload.source, params: payload });
   });
   events.addEventListener('codex-exit', () => {
     statusEl.textContent = 'Codex app-server exited';
