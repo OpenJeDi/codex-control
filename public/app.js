@@ -307,10 +307,16 @@ function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell
 }
 
 function captureOpenTurnDetails() {
-  const open = new Set();
+  const open = new Map();
   detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
-    const details = turn.querySelector('.turn-details');
-    if (details?.open) open.add(turn.dataset.turnId || String(index));
+    const openDetails = [];
+    turn.querySelectorAll('details').forEach((details, detailsIndex) => {
+      if (!details.open) return;
+      const summary = [...details.children].find((child) => child.tagName === 'SUMMARY');
+      const label = summary?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 160) || '';
+      openDetails.push(`${detailsIndex}|${details.className || ''}|${label}`);
+    });
+    if (openDetails.length) open.set(turn.dataset.turnId || String(index), new Set(openDetails));
   });
   return open;
 }
@@ -318,8 +324,13 @@ function captureOpenTurnDetails() {
 function restoreOpenTurnDetails(open) {
   if (!open?.size) return;
   detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
-    const details = turn.querySelector('.turn-details');
-    if (details && open.has(turn.dataset.turnId || String(index))) details.open = true;
+    const openDetails = open.get(turn.dataset.turnId || String(index));
+    if (!openDetails?.size) return;
+    turn.querySelectorAll('details').forEach((details, detailsIndex) => {
+      const summary = [...details.children].find((child) => child.tagName === 'SUMMARY');
+      const label = summary?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 160) || '';
+      if (openDetails.has(`${detailsIndex}|${details.className || ''}|${label}`)) details.open = true;
+    });
   });
 }
 
@@ -358,6 +369,26 @@ function restoreScrollAnchor(scroller, anchor, fallbackScrollTop = 0) {
   const top = scroller.getBoundingClientRect().top;
   const rect = target.getBoundingClientRect();
   scroller.scrollTop += rect.top - top - anchor.offset;
+}
+
+function restoreDetailScrollState(scroller, { anchor, fallbackScrollTop = 0, followBottom = false } = {}) {
+  if (!scroller) return;
+  if (followBottom) scrollDetailToBottom();
+  else restoreScrollAnchor(scroller, anchor, fallbackScrollTop);
+  updateJumpBottomButton(scroller);
+}
+
+function stabilizeScrollAfterMediaLayout(scroller, requestSeq, anchor, fallbackScrollTop) {
+  if (!scroller || !anchor?.turnId) return;
+  const restore = () => {
+    if (requestSeq !== detailRequestSeq) return;
+    restoreDetailScrollState(scroller, { anchor, fallbackScrollTop });
+  };
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+  scroller.querySelectorAll('img, video').forEach((media) => {
+    media.addEventListener('load', restore, { once: true });
+    media.addEventListener('loadedmetadata', restore, { once: true });
+  });
 }
 
 
@@ -1526,9 +1557,12 @@ async function loadDetail(id, { quiet = false } = {}) {
     bindDetailScrollControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
-      if (!quiet || shouldContinueFollowing) scrollDetailToBottom();
-      else if (quiet && scroller) restoreScrollAnchor(scroller, scrollAnchor, previousScrollTop);
-      updateJumpBottomButton(scroller);
+      restoreDetailScrollState(scroller, {
+        anchor: scrollAnchor,
+        fallbackScrollTop: previousScrollTop,
+        followBottom: !quiet || shouldContinueFollowing,
+      });
+      if (quiet && !shouldContinueFollowing) stabilizeScrollAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop);
     });
   } catch (error) {
     if (requestSeq !== detailRequestSeq || id !== activeId) return;
