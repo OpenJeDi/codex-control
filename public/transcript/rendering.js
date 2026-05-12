@@ -61,9 +61,15 @@ function renderCodeSpan(code, options = {}) {
 export function renderInlineMarkdown(text, options = {}) {
   const codeSpans = [];
   const media = [];
+  const links = [];
   const pushCodeSpan = (code) => {
     const token = `@@CODE${codeSpans.length}@@`;
     codeSpans.push(renderCodeSpan(code, options));
+    return token;
+  };
+  const pushLink = (href, label = href) => {
+    const token = `@@LINK${links.length}@@`;
+    links.push(renderMarkdownMedia(href, label, false));
     return token;
   };
   let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
@@ -74,10 +80,17 @@ export function renderInlineMarkdown(text, options = {}) {
     const token = `@@MEDIA${media.length}@@`;
     media.push(renderMarkdownMedia(src, alt, true));
     return token;
+  }).replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_match, label, url) => {
+    return pushLink(url, label);
+  }).replace(/(^|[\s(])((?:https?:\/\/|www\.)[^\s<>()\[\]{}"]+)/gi, (_match, prefix, rawUrl) => {
+    const url = rawUrl.replace(/[.,;:!?]+$/g, '');
+    const suffix = rawUrl.slice(url.length);
+    const href = /^www\./i.test(url) ? `https://${url}` : url;
+    return `${prefix}${pushLink(href, url)}${suffix}`;
   });
   html = escapeHtml(html);
-  html = html.replace(/\[([^\]\n]+)\]((?:\()([^)]+)(?:\)))/g, (_match, label, _wrapped, url) => renderMarkdownMedia(url, label, false));
   for (const [index, code] of codeSpans.entries()) html = html.replace(`@@CODE${index}@@`, code);
+  for (const [index, link] of links.entries()) html = html.replace(`@@LINK${index}@@`, link);
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
   for (const [index, rendered] of media.entries()) html = html.replace(`@@MEDIA${index}@@`, rendered);
