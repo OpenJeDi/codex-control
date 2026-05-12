@@ -27,6 +27,7 @@ This document is a public-safe snapshot of the current implementation. Private c
 - Compact in-memory recent events for useful thread, turn, and control events
 - Runtime diagnostics for local write access and Git metadata access
 - Development restart helper for restarting the local Node server
+- Restart helper refuses by default while sessions are active, because the current Node process owns its `codex app-server` child process
 - Read-only mode that disables mutating API routes and hides write controls
 - Optional built-in HTTP Basic Auth for all non-health routes
 - Local file/media links scoped to session permissions, with explicit system-wide opt-in
@@ -39,6 +40,7 @@ This document is a public-safe snapshot of the current implementation. Private c
 - Account, rate-limit, and blocked-state diagnostics need clearer first-class UI.
 - Worktree creation assumes a simple branch-worktree workflow and should become more configurable before broader use.
 - Restart behavior is local-development oriented and should remain disabled or explicitly configured in deployed environments.
+- Codex Control cannot yet restart only the Node/web layer while keeping active Codex turns alive; that needs external/reused app-server mode.
 - Exposed deployments need explicit authentication/network controls; use read-only mode when viewers should not be able to mutate sessions or worktrees.
 - `CODEX_CONTROL_FILE_SERVING=system` intentionally weakens local file isolation and should only be used on trusted machines.
 

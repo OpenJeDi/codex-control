@@ -189,6 +189,12 @@ An optional Windows helper is available for local environments that use a Window
 npm run restart:windows
 ```
 
+The helper refuses to restart while sessions are active, because the current Codex Control server owns its `codex app-server` child process and stopping Node interrupts active turns. Use an explicit forced restart only when interruption is intentional:
+
+```powershell
+npm run restart:windows:force
+```
+
 Set `CODEX_CONTROL_RESTART_TASK` when the scheduled task name is not the helper default.
 
 ## Safety Notes

@@ -15,6 +15,7 @@ User ideas captured for later planning. Everything below is unplanned backlog un
 - Thread controls: fork, rollback, compact. Rename and archive are implemented in the detail view; Interrupt/Stop and Steer are implemented for active turns, including stale-busy-state clearing when app-server has no active turn.
 - Richer live streaming / follow view.
 - Improve the development restart endpoint behavior: `/api/codex/restart` should respond quickly, restart asynchronously, and expose clear progress/health state so callers do not appear to hang.
+- Add an external/reused app-server mode so Codex Control can restart its Node/web layer without interrupting active Codex turns. Current architecture owns `codex app-server` as a child process over stdio, so stopping Node closes the app-server transport.
 - Continue modularizing large orchestration files when changes justify it: split `src/server.mjs` into focused runtime/session/API modules and split `public/app.js` into session-list/detail/composer orchestration modules, while keeping transcript parsing/rendering isolated in the current transcript folders.
 
 ## Live observability / status chrome
