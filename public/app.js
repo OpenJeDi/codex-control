@@ -68,6 +68,8 @@ let lightboxState = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 
 let newSessionWorktrees = [];
 let visibleThreadIds = new Set();
 let backgroundListRefreshTimer = null;
+let scrollStabilitySeq = 0;
+let programmaticScrollUntil = 0;
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
@@ -292,12 +294,38 @@ function isNearBottom(el, threshold = 220) {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
 }
 
+function markProgrammaticScroll(duration = 450) {
+  programmaticScrollUntil = Math.max(programmaticScrollUntil, Date.now() + duration);
+}
+
+function markUserScrollIntent() {
+  if (Date.now() > programmaticScrollUntil) scrollStabilitySeq += 1;
+}
+
+function scrollElementToBottom(scroller, { smooth = false, requestSeq = detailRequestSeq, stabilitySeq = scrollStabilitySeq } = {}) {
+  if (!scroller) return;
+  const apply = (behavior = 'auto') => {
+    if (requestSeq !== detailRequestSeq || stabilitySeq !== scrollStabilitySeq) return;
+    markProgrammaticScroll();
+    scroller.scrollTo({ top: scroller.scrollHeight + scroller.clientHeight, behavior });
+    updateJumpBottomButton(scroller);
+  };
+  apply(smooth ? 'smooth' : 'auto');
+  requestAnimationFrame(() => apply());
+  requestAnimationFrame(() => requestAnimationFrame(() => apply()));
+  scroller.querySelectorAll('img, video').forEach((media) => {
+    const loaded = media.tagName === 'IMG' ? media.complete : media.readyState >= 1;
+    if (loaded) return;
+    media.addEventListener('load', () => apply(), { once: true });
+    media.addEventListener('loadedmetadata', () => apply(), { once: true });
+  });
+}
+
 function scrollDetailToBottom({ smooth = false } = {}) {
   const scroller = detailEl.querySelector('.detail-shell .detail');
   if (!scroller) return;
-  scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-  updateJumpBottomButton(scroller);
-  requestAnimationFrame(() => updateJumpBottomButton(scroller));
+  const stabilitySeq = ++scrollStabilitySeq;
+  scrollElementToBottom(scroller, { smooth, stabilitySeq });
 }
 
 function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell .detail')) {
@@ -362,31 +390,41 @@ function captureScrollAnchor(scroller) {
 function restoreScrollAnchor(scroller, anchor, fallbackScrollTop = 0) {
   if (!scroller) return;
   if (!anchor?.turnId) {
+    markProgrammaticScroll();
     scroller.scrollTop = fallbackScrollTop;
     return;
   }
   const target = scroller.querySelector(`.turn[data-turn-id="${CSS.escape(anchor.turnId)}"]`);
   if (!target) {
+    markProgrammaticScroll();
     scroller.scrollTop = fallbackScrollTop;
     return;
   }
   const top = scroller.getBoundingClientRect().top;
   const rect = target.getBoundingClientRect();
+  markProgrammaticScroll();
   scroller.scrollTop += rect.top - top - anchor.offset;
 }
 
-function restoreDetailScrollState(scroller, { anchor, fallbackScrollTop = 0, followBottom = false } = {}) {
+function restoreDetailScrollState(scroller, {
+  anchor,
+  fallbackScrollTop = 0,
+  followBottom = false,
+  requestSeq = detailRequestSeq,
+  stabilitySeq = scrollStabilitySeq,
+} = {}) {
   if (!scroller) return;
-  if (followBottom) scrollDetailToBottom();
+  if (followBottom) scrollElementToBottom(scroller, { requestSeq, stabilitySeq });
   else restoreScrollAnchor(scroller, anchor, fallbackScrollTop);
   updateJumpBottomButton(scroller);
 }
 
-function stabilizeScrollAfterMediaLayout(scroller, requestSeq, anchor, fallbackScrollTop) {
+function stabilizeScrollAfterMediaLayout(scroller, requestSeq, anchor, fallbackScrollTop, stabilitySeq) {
   if (!scroller || !anchor?.turnId) return;
   const restore = () => {
     if (requestSeq !== detailRequestSeq) return;
-    restoreDetailScrollState(scroller, { anchor, fallbackScrollTop });
+    if (stabilitySeq !== scrollStabilitySeq) return;
+    restoreDetailScrollState(scroller, { anchor, fallbackScrollTop, requestSeq, stabilitySeq });
   };
   requestAnimationFrame(() => requestAnimationFrame(restore));
   scroller.querySelectorAll('img, video').forEach((media) => {
@@ -401,6 +439,10 @@ function bindDetailScrollControls() {
   const button = detailEl.querySelector('.jump-bottom');
   if (!scroller || !button) return;
   scroller.addEventListener('scroll', () => updateJumpBottomButton(scroller), { passive: true });
+  scroller.addEventListener('wheel', markUserScrollIntent, { passive: true });
+  scroller.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+  scroller.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
+  scroller.addEventListener('keydown', markUserScrollIntent);
   button.addEventListener('click', () => scrollDetailToBottom());
   updateJumpBottomButton(scroller);
   requestAnimationFrame(() => updateJumpBottomButton(scroller));
@@ -457,18 +499,17 @@ function saveSelectedRepo(repo) {
 }
 
 function savedActiveSession() {
-  return sessionStorage.getItem(ACTIVE_SESSION_TAB_KEY) || localStorage.getItem(ACTIVE_SESSION_KEY) || '';
+  return sessionStorage.getItem(ACTIVE_SESSION_TAB_KEY) || '';
 }
 
 function saveActiveSession(id) {
   const value = String(id ?? '').trim();
   if (value) {
     sessionStorage.setItem(ACTIVE_SESSION_TAB_KEY, value);
-    localStorage.setItem(ACTIVE_SESSION_KEY, value);
   } else {
     sessionStorage.removeItem(ACTIVE_SESSION_TAB_KEY);
-    localStorage.removeItem(ACTIVE_SESSION_KEY);
   }
+  localStorage.removeItem(ACTIVE_SESSION_KEY);
 }
 
 function saveCustomRepos(repos) {
@@ -1165,7 +1206,7 @@ async function loadSessions({ quiet = false } = {}) {
     for (const button of listEl.querySelectorAll('.session')) {
       button.addEventListener('click', () => loadDetail(button.dataset.id));
     }
-    if (!activeId) {
+    if (!activeId && !quiet) {
       const savedId = savedActiveSession();
       const targetId = data.some((thread) => thread.id === savedId) ? savedId : data[0]?.id;
       if (targetId) await loadDetail(targetId);
@@ -1521,6 +1562,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
   const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
+  const scrollRestoreSeq = scrollStabilitySeq;
   const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
   const sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
   const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
@@ -1576,8 +1618,10 @@ async function loadDetail(id, { quiet = false } = {}) {
         anchor: scrollAnchor,
         fallbackScrollTop: previousScrollTop,
         followBottom: !quiet || shouldContinueFollowing,
+        requestSeq,
+        stabilitySeq: scrollRestoreSeq,
       });
-      if (quiet && !shouldContinueFollowing) stabilizeScrollAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop);
+      if (quiet && !shouldContinueFollowing) stabilizeScrollAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop, scrollRestoreSeq);
     });
   } catch (error) {
     if (requestSeq !== detailRequestSeq || id !== activeId) return;
@@ -1624,7 +1668,7 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   const archiveLabel = isArchived ? 'Unarchive' : 'Archive';
   const writable = !isReadOnly();
-  return `<div class="detail-shell">
+  return `<div class="detail-shell" data-thread-id="${escapeAttribute(thread.id || '')}">
     <div class="session-header">
       <details class="session-meta">
         <summary class="session-summary">
@@ -1678,6 +1722,23 @@ function renderDetail({ thread, turns, queuedMessages = [], events = [], permiss
       <div class="attachment-preview" aria-live="polite"></div>
     </form>` : ''}
   </div>`;
+}
+
+function currentDetailThreadId() {
+  return detailEl.querySelector('.detail-shell')?.dataset.threadId || '';
+}
+
+function composerThreadId(form, fallbackId = '') {
+  return form?.closest('.detail-shell')?.dataset.threadId || fallbackId || '';
+}
+
+function verifiedVisibleThreadId(targetId) {
+  const id = String(targetId ?? '').trim();
+  if (!id || id !== activeId || currentDetailThreadId() !== id) {
+    window.alert('The selected session changed before this action completed. Pick the session again before sending.');
+    return '';
+  }
+  return id;
 }
 
 function renderApprovalBlockedIndicator(thread) {
@@ -1823,13 +1884,15 @@ function bindQueuedMessageControls(threadId) {
 async function updateQueuedMessage(threadId, queuedId, action, button) {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   if (!threadId || !queuedId || !action) return;
+  const targetId = verifiedVisibleThreadId(threadId);
+  if (!targetId) return;
   button.disabled = true;
   const label = button.textContent;
   button.textContent = '...';
   try {
     const body = action === 'up' || action === 'down' ? { direction: action } : {};
-    await jsonApi(`/api/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedId)}/${action === 'up' || action === 'down' ? 'move' : action}`, body);
-    scheduleDetailRefresh(threadId, 100);
+    await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/queue/${encodeURIComponent(queuedId)}/${action === 'up' || action === 'down' ? 'move' : action}`, body);
+    scheduleDetailRefresh(targetId, 100);
     scheduleLoadSessions();
   } catch (error) {
     window.alert(error.message);
@@ -1840,26 +1903,32 @@ async function updateQueuedMessage(threadId, queuedId, action, button) {
 
 async function renameThread(id, thread) {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
+  const targetId = verifiedVisibleThreadId(id);
+  if (!targetId) return;
   const current = thread?.name || '';
   const name = window.prompt('Session name:', current);
   if (name === null) return;
-  await jsonApi(`/api/threads/${encodeURIComponent(id)}/name`, { name });
-  scheduleDetailRefresh(id, 150);
+  if (!verifiedVisibleThreadId(targetId)) return;
+  await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/name`, { name });
+  scheduleDetailRefresh(targetId, 150);
   scheduleLoadSessions();
 }
 
 async function toggleArchiveThread(id, thread = {}) {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
+  const targetId = verifiedVisibleThreadId(id);
+  if (!targetId) return;
   const isArchived = Boolean(thread?.archived || thread?.isArchived || thread?.archivedAt || thread?.archived_at);
   if (isArchived) {
-    await jsonApi(`/api/threads/${encodeURIComponent(id)}/unarchive`, {});
-    scheduleDetailRefresh(id, 150);
+    await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/unarchive`, {});
+    scheduleDetailRefresh(targetId, 150);
     scheduleLoadSessions();
     return;
   }
   const ok = window.confirm('Archive this session? You can include archived sessions from the filter drawer later.');
   if (!ok) return;
-  await jsonApi(`/api/threads/${encodeURIComponent(id)}/archive`, {});
+  if (!verifiedVisibleThreadId(targetId)) return;
+  await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/archive`, {});
   activeId = null;
   saveActiveSession('');
   detailEl.className = 'detail empty';
@@ -1870,12 +1939,14 @@ async function toggleArchiveThread(id, thread = {}) {
 async function steerTurn(id, button = detailEl.querySelector('[data-action=steer-turn]')) {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = detailEl.querySelector('#promptForm');
+  const targetId = verifiedVisibleThreadId(composerThreadId(form, id));
+  if (!targetId) return;
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
   savePermissionDefaults(pref);
-  saveThreadPermission(id, pref);
+  saveThreadPermission(targetId, pref);
   saveModelDefaults(modelPref);
-  saveThreadModel(id, modelPref);
+  saveThreadModel(targetId, modelPref);
   const formData = new FormData(form);
   if (!String(formData.get('prompt') ?? '').trim() && !formData.getAll('files').some((file) => file?.size)) {
     window.alert('Enter guidance or attach a file to steer.');
@@ -1886,32 +1957,34 @@ async function steerTurn(id, button = detailEl.querySelector('[data-action=steer
     button.textContent = 'Steering...';
   }
   try {
-    await fetch(`/api/threads/${encodeURIComponent(id)}/steer`, { method: 'POST', body: formData }).then(async (res) => {
+    await fetch(`/api/threads/${encodeURIComponent(targetId)}/steer`, { method: 'POST', body: formData }).then(async (res) => {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
     clearPromptComposerContent(form);
-    scheduleDetailRefresh(id, 250);
+    scheduleDetailRefresh(targetId, 250);
   } catch (error) {
     window.alert(error.message);
     if (button) {
       button.disabled = false;
-      button.textContent = 'Steer';
+      button.textContent = 'Steer now';
     }
   }
 }
 
 async function interruptTurn(id) {
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
+  const targetId = verifiedVisibleThreadId(currentDetailThreadId() || id);
+  if (!targetId) return;
   const button = detailEl.querySelector('[data-action=interrupt-turn]');
   if (button) {
     button.disabled = true;
     button.textContent = 'Stopping...';
   }
   try {
-    await jsonApi(`/api/threads/${encodeURIComponent(id)}/interrupt`, {});
-    scheduleDetailRefresh(id, 250);
+    await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/interrupt`, {});
+    scheduleDetailRefresh(targetId, 250);
     scheduleLoadSessions();
   } catch (error) {
     window.alert(error.message);
@@ -1926,26 +1999,28 @@ async function submitPrompt(event, id) {
   event.preventDefault();
   if (isReadOnly()) return window.alert('Codex Control is running in read-only mode.');
   const form = event.currentTarget;
+  const targetId = verifiedVisibleThreadId(composerThreadId(form, id));
+  if (!targetId) return;
   const submit = form.querySelector('button[type="submit"]');
   const pref = preferenceFromControls(form);
   const modelPref = modelPreferenceFromControls(form);
   savePermissionDefaults(pref);
-  saveThreadPermission(id, pref);
+  saveThreadPermission(targetId, pref);
   saveModelDefaults(modelPref);
-  saveThreadModel(id, modelPref);
+  saveThreadModel(targetId, modelPref);
   const formData = new FormData(form);
   applyVisibleModelToFormData(formData, form);
   const wasQueuedSend = submit.textContent.includes('after current');
   submit.disabled = true;
   submit.textContent = 'Sending...';
   try {
-    await fetch(`/api/threads/${encodeURIComponent(id)}/turn`, { method: 'POST', body: formData }).then(async (res) => {
+    await fetch(`/api/threads/${encodeURIComponent(targetId)}/turn`, { method: 'POST', body: formData }).then(async (res) => {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || res.statusText);
       return json;
     });
     clearPromptComposerContent(form);
-    scheduleDetailRefresh(id, 80);
+    scheduleDetailRefresh(targetId, 80);
     scheduleLoadSessions();
   } catch (error) {
     window.alert(error.message);
