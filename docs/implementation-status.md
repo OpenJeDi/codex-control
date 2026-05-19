@@ -26,8 +26,8 @@ This document is a public-safe snapshot of the current implementation. Private c
 - Rename, archive, and unarchive session actions
 - Compact in-memory recent events for useful thread, turn, and control events
 - Runtime diagnostics for local write access and Git metadata access
-- Development restart helper for restarting the local Node server
-- Restart helper refuses by default while sessions are active, because the current Node process owns its `codex app-server` child process
+- Development stop/restart helpers for the local Node server
+- Stop/restart helpers refuse by default while sessions are active, because the current Node process owns its `codex app-server` child process
 - Read-only mode that disables mutating API routes and hides write controls
 - Optional built-in HTTP Basic Auth for all non-health routes
 - Local file/media links scoped to session permissions, with explicit system-wide opt-in

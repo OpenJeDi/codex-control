@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",
+    "stop": "npm run stop:windows",
+    "stop:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop-codex-control.ps1",
+    "stop:windows:force": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop-codex-control.ps1 -Force",
     "restart": "npm run restart:windows",
     "restart:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-codex-control.ps1",
     "restart:windows:force": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/restart-codex-control.ps1 -Force"
