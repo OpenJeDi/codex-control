@@ -1,5 +1,6 @@
 import { createDetailScrollController } from './detail/scroll.js';
 import { createThreadEventRouter } from './sessions/threadEvents.js';
+import { customRepos, savedSelectedRepo, saveCustomRepos, saveSelectedRepo } from './state/repoSelection.js';
 import { createActiveSessionState, savedActiveSession } from './state/sessionSelection.js';
 import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
 import {
@@ -81,9 +82,6 @@ const rowRefreshInFlight = new Set();
 let eventListRefreshTimer = null;
 let backgroundListRefreshTimer = null;
 
-const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
-const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
-const SELECTED_REPO_TAB_KEY = 'codex-control.selectedRepo.tab';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
@@ -360,33 +358,6 @@ function renderRepoLink(originUrl) {
   return `<a href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
 }
 
-function customRepos() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CUSTOM_REPOS_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-  } catch {
-    return [];
-  }
-}
-
-function savedSelectedRepo() {
-  return sessionStorage.getItem(SELECTED_REPO_TAB_KEY) || localStorage.getItem(SELECTED_REPO_KEY) || '';
-}
-
-function saveSelectedRepo(repo) {
-  const value = String(repo ?? '').trim();
-  if (value) {
-    sessionStorage.setItem(SELECTED_REPO_TAB_KEY, value);
-    localStorage.setItem(SELECTED_REPO_KEY, value);
-  } else {
-    sessionStorage.removeItem(SELECTED_REPO_TAB_KEY);
-    localStorage.removeItem(SELECTED_REPO_KEY);
-  }
-}
-
-function saveCustomRepos(repos) {
-  localStorage.setItem(CUSTOM_REPOS_KEY, JSON.stringify([...new Set(repos.map((repo) => String(repo).trim()).filter(Boolean))]));
-}
 function readJsonLocalStorage(key, fallback) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || 'null');
