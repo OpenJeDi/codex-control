@@ -1,3 +1,4 @@
+import { createActiveSessionState, savedActiveSession } from './state/sessionSelection.js';
 import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
 import {
   bindCodeCopyControls,
@@ -59,7 +60,7 @@ const planCommand = document.querySelector('#planCommand');
 const planError = document.querySelector('#planError');
 const closeNewSession = document.querySelector('#closeNewSession');
 const cancelNewSession = document.querySelector('#cancelNewSession');
-let activeId = null;
+const activeSession = createActiveSessionState();
 let debounceTimer = null;
 let detailRefreshTimer = null;
 let detailStateTimer = null;
@@ -82,8 +83,6 @@ let programmaticScrollUntil = 0;
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
 const SELECTED_REPO_TAB_KEY = 'codex-control.selectedRepo.tab';
-const ACTIVE_SESSION_KEY = 'codex-control.activeSession';
-const ACTIVE_SESSION_TAB_KEY = 'codex-control.activeSession.tab';
 const SIDEBAR_WIDTH_KEY = 'codex-control.sidebarWidth';
 const SIDEBAR_COLLAPSED_KEY = 'codex-control.sidebarCollapsed';
 const PERMISSION_DEFAULTS_KEY = 'codex-control.permissionDefaults';
@@ -509,20 +508,6 @@ function saveSelectedRepo(repo) {
     sessionStorage.removeItem(SELECTED_REPO_TAB_KEY);
     localStorage.removeItem(SELECTED_REPO_KEY);
   }
-}
-
-function savedActiveSession() {
-  return sessionStorage.getItem(ACTIVE_SESSION_TAB_KEY) || '';
-}
-
-function saveActiveSession(id) {
-  const value = String(id ?? '').trim();
-  if (value) {
-    sessionStorage.setItem(ACTIVE_SESSION_TAB_KEY, value);
-  } else {
-    sessionStorage.removeItem(ACTIVE_SESSION_TAB_KEY);
-  }
-  localStorage.removeItem(ACTIVE_SESSION_KEY);
 }
 
 function saveCustomRepos(repos) {
@@ -1220,12 +1205,12 @@ async function loadSessions({ quiet = false } = {}) {
     for (const button of listEl.querySelectorAll('.session')) {
       bindSessionRow(button);
     }
-    if (!activeId && !quiet) {
+    if (!activeSession.id && !quiet) {
       const savedId = savedActiveSession();
       const targetId = data.some((thread) => thread.id === savedId) ? savedId : data[0]?.id;
       if (targetId) await loadDetail(targetId);
     }
-    else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeId);
+    else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeSession.id);
   } catch (error) {
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
@@ -1235,7 +1220,7 @@ function detailStateFromDetailData(data = {}) {
   const turns = Array.isArray(data.turns) ? data.turns : [];
   const latestTurn = turns[turns.length - 1] ?? {};
   return {
-    threadId: String(data.thread?.id ?? activeId ?? ''),
+    threadId: String(data.thread?.id ?? activeSession.id ?? ''),
     updatedAt: Number(data.thread?.updatedAt ?? 0),
     status: statusLabel(data.thread),
     activeTurnId: isBusyThread(data.thread) ? String(latestTurn.id ?? '') : '',
@@ -1251,7 +1236,7 @@ function detailStateFromDetailData(data = {}) {
 function detailStateFromStateResponse(data = {}) {
   const state = data.state ?? {};
   return {
-    threadId: String(state.threadId ?? data.thread?.id ?? activeId ?? ''),
+    threadId: String(state.threadId ?? data.thread?.id ?? activeSession.id ?? ''),
     updatedAt: Number(state.updatedAt ?? data.thread?.updatedAt ?? 0),
     status: state.status || statusLabel(data.thread),
     activeTurnId: String(state.activeTurnId ?? ''),
@@ -1262,7 +1247,7 @@ function detailStateFromStateResponse(data = {}) {
 }
 
 function patchActiveDetailStatus(thread) {
-  if (!thread || String(thread.id ?? '') !== String(activeId ?? '')) return;
+  if (!thread || String(thread.id ?? '') !== String(activeSession.id ?? '')) return;
   const status = statusLabel(thread);
   const css = statusClass(thread);
   const badge = detailEl.querySelector('.session-summary .badge.status');
@@ -1580,7 +1565,7 @@ function renderBranchGroups(sessions) {
 }
 
 function renderSession(session) {
-  const active = session.id === activeId ? ' active' : '';
+  const active = activeSession.is(session.id) ? ' active' : '';
   const branch = session.gitInfo?.branch || 'no branch';
   const source = session.source || 'unknown';
   const cwd = compactPath(session.cwd);
@@ -1618,10 +1603,10 @@ function refreshAgeIndicators() {
 }
 
 async function loadDetail(id, { quiet = false } = {}) {
-  if (quiet && activeId && id !== activeId) return;
+  if (quiet && activeSession.id && id !== activeSession.id) return;
   if (!quiet) clearTimeout(detailRefreshTimer);
   const requestSeq = ++detailRequestSeq;
-  const previousId = activeId;
+  const previousId = activeSession.id;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
   const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
@@ -1640,8 +1625,7 @@ async function loadDetail(id, { quiet = false } = {}) {
     end: previousTextarea.selectionEnd,
     direction: previousTextarea.selectionDirection,
   } : null;
-  activeId = id;
-  saveActiveSession(id);
+  activeSession.set(id);
   for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === id);
   if (!quiet) {
     detailEl.className = 'empty';
@@ -1649,7 +1633,7 @@ async function loadDetail(id, { quiet = false } = {}) {
   }
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
-    if (requestSeq !== detailRequestSeq || id !== activeId) return;
+    if (requestSeq !== detailRequestSeq || id !== activeSession.id) return;
     activeDetailState = detailStateFromDetailData(data);
     lastDetailLoadAt = Date.now();
     detailEl.className = 'detail-host';
@@ -1689,7 +1673,7 @@ async function loadDetail(id, { quiet = false } = {}) {
       if (quiet && !shouldContinueFollowing) stabilizeScrollAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop, scrollRestoreSeq);
     });
   } catch (error) {
-    if (requestSeq !== detailRequestSeq || id !== activeId) return;
+    if (requestSeq !== detailRequestSeq || id !== activeSession.id) return;
     detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
@@ -1799,7 +1783,7 @@ function composerThreadId(form, fallbackId = '') {
 
 function verifiedVisibleThreadId(targetId) {
   const id = String(targetId ?? '').trim();
-  if (!id || id !== activeId || currentDetailThreadId() !== id) {
+  if (!id || id !== activeSession.id || currentDetailThreadId() !== id) {
     window.alert('The selected session changed before this action completed. Pick the session again before sending.');
     return '';
   }
@@ -1994,8 +1978,7 @@ async function toggleArchiveThread(id, thread = {}) {
   if (!ok) return;
   if (!verifiedVisibleThreadId(targetId)) return;
   await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/archive`, {});
-  activeId = null;
-  saveActiveSession('');
+  activeSession.clear();
   detailEl.className = 'detail empty';
   detailEl.textContent = 'Session archived.';
   scheduleLoadSessions();
@@ -2489,7 +2472,7 @@ function replaceSessionRow(thread) {
   const next = wrapper.firstElementChild;
   if (!next) return false;
   bindSessionRow(next);
-  next.classList.toggle('active', id === activeId);
+  next.classList.toggle('active', activeSession.is(id));
   current.replaceWith(next);
   refreshAgeIndicators();
   return true;
@@ -2536,7 +2519,7 @@ function scheduleBackgroundLoadSessions() {
   backgroundListRefreshTimer = setTimeout(() => loadSessions({ quiet: true }), delay);
 }
 
-function scheduleDetailRefresh(id = activeId, delay = 500) {
+function scheduleDetailRefresh(id = activeSession.id, delay = 500) {
   if (!id) return;
   clearTimeout(detailStateTimer);
   clearTimeout(detailRefreshTimer);
@@ -2577,14 +2560,14 @@ function shouldReloadDetailFromState(previous, next, thread) {
   return false;
 }
 
-async function refreshActiveDetailState(id = activeId) {
+async function refreshActiveDetailState(id = activeSession.id) {
   const key = String(id ?? '');
   detailStateTimer = null;
-  if (!key || key !== activeId || detailStateInFlight) return;
+  if (!key || key !== activeSession.id || detailStateInFlight) return;
   detailStateInFlight = true;
   try {
     const data = await api(`/api/threads/${encodeURIComponent(key)}/state`);
-    if (key !== activeId) return;
+    if (key !== activeSession.id) return;
     const nextState = detailStateFromStateResponse(data);
     const previousState = activeDetailState;
     activeDetailState = { ...previousState, ...nextState };
@@ -2600,7 +2583,7 @@ async function refreshActiveDetailState(id = activeId) {
   }
 }
 
-function scheduleEventDetailRefresh(id = activeId) {
+function scheduleEventDetailRefresh(id = activeSession.id) {
   const delay = document.hidden ? HIDDEN_EVENT_REFRESH_DELAY_MS : EVENT_DETAIL_REFRESH_DELAY_MS;
   clearTimeout(detailStateTimer);
   detailStateTimer = setTimeout(() => refreshActiveDetailState(id), delay);
@@ -2610,14 +2593,14 @@ function connectEvents() {
   const refreshForThread = (threadId, eventInfo = {}) => {
     const id = String(threadId ?? '');
     const patch = threadPatchFromEvent(eventInfo.method, eventInfo.params);
-    if (id && id === activeId) {
+    if (id && activeSession.is(id)) {
       if (patch) {
         replaceSessionRow(patch);
         patchActiveDetailStatus(patch);
       } else {
         scheduleSessionRowRefresh(id);
       }
-      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(activeId);
+      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(id);
       return;
     }
     if (id && visibleThreadIds.has(id)) {
@@ -2634,14 +2617,15 @@ function connectEvents() {
       return;
     }
     const patch = threadPatchFromEvent(eventInfo.method, eventInfo.params);
-    if (activeId && ids.includes(activeId)) {
+    const currentId = activeSession.id;
+    if (currentId && ids.includes(currentId)) {
       if (patch) {
         replaceSessionRow(patch);
         patchActiveDetailStatus(patch);
       }
-      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(activeId);
+      if (eventNeedsActiveDetailState(eventInfo.method, eventInfo.params)) scheduleEventDetailRefresh(currentId);
     }
-    const visibleIds = ids.filter((id) => id === activeId || visibleThreadIds.has(id));
+    const visibleIds = ids.filter((id) => id === currentId || visibleThreadIds.has(id));
     if (visibleIds.length) {
       for (const id of visibleIds) {
         if (patch && String(patch.id) === id) replaceSessionRow(patch);
@@ -2674,7 +2658,7 @@ document.addEventListener('visibilitychange', () => {
   clearTimeout(eventListRefreshTimer);
   clearTimeout(backgroundListRefreshTimer);
   clearTimeout(detailStateTimer);
-  if (activeId) scheduleDetailRefresh(activeId, 100);
+  if (activeSession.id) scheduleDetailRefresh(activeSession.id, 100);
   scheduleLoadSessions();
 });
 
