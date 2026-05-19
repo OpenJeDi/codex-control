@@ -1,3 +1,4 @@
+import { createDetailScrollController } from './detail/scroll.js';
 import { createActiveSessionState, savedActiveSession } from './state/sessionSelection.js';
 import { createTranscriptBlockRenderer, createTranscriptItemRenderer } from './transcript/registry.js';
 import {
@@ -65,6 +66,7 @@ let debounceTimer = null;
 let detailRefreshTimer = null;
 let detailStateTimer = null;
 let detailRequestSeq = 0;
+const detailScroll = createDetailScrollController({ detailElement: detailEl, getRequestSeq: () => detailRequestSeq });
 let detailStateInFlight = false;
 let activeDetailState = null;
 let lastDetailLoadAt = 0;
@@ -77,8 +79,6 @@ const rowRefreshTimers = new Map();
 const rowRefreshInFlight = new Set();
 let eventListRefreshTimer = null;
 let backgroundListRefreshTimer = null;
-let scrollStabilitySeq = 0;
-let programmaticScrollUntil = 0;
 
 const CUSTOM_REPOS_KEY = 'codex-control.customRepos';
 const SELECTED_REPO_KEY = 'codex-control.selectedRepo';
@@ -301,55 +301,6 @@ function inferredModelEvents(thread, turns = [], events = []) {
   return inferred;
 }
 
-function isNearBottom(el, threshold = 220) {
-  if (!el) return false;
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
-}
-
-function markProgrammaticScroll(duration = 450) {
-  programmaticScrollUntil = Math.max(programmaticScrollUntil, Date.now() + duration);
-}
-
-function markUserScrollIntent() {
-  if (Date.now() > programmaticScrollUntil) scrollStabilitySeq += 1;
-}
-
-function scrollElementToBottom(scroller, { smooth = false, requestSeq = detailRequestSeq, stabilitySeq = scrollStabilitySeq } = {}) {
-  if (!scroller) return;
-  const apply = (behavior = 'auto') => {
-    if (requestSeq !== detailRequestSeq || stabilitySeq !== scrollStabilitySeq) return;
-    markProgrammaticScroll();
-    scroller.scrollTo({ top: scroller.scrollHeight + scroller.clientHeight, behavior });
-    updateJumpBottomButton(scroller);
-  };
-  apply(smooth ? 'smooth' : 'auto');
-  requestAnimationFrame(() => apply());
-  requestAnimationFrame(() => requestAnimationFrame(() => apply()));
-  scroller.querySelectorAll('img, video').forEach((media) => {
-    const loaded = media.tagName === 'IMG' ? media.complete : media.readyState >= 1;
-    if (loaded) return;
-    media.addEventListener('load', () => apply(), { once: true });
-    media.addEventListener('loadedmetadata', () => apply(), { once: true });
-  });
-}
-
-function scrollDetailToBottom({ smooth = false } = {}) {
-  const scroller = detailEl.querySelector('.detail-shell .detail');
-  if (!scroller) return;
-  const stabilitySeq = ++scrollStabilitySeq;
-  scrollElementToBottom(scroller, { smooth, stabilitySeq });
-}
-
-function updateJumpBottomButton(scroller = detailEl.querySelector('.detail-shell .detail')) {
-  const button = detailEl.querySelector('.jump-bottom');
-  if (!button || !scroller) return;
-  const canScroll = scroller.scrollHeight > scroller.clientHeight + 1;
-  const atBottom = isNearBottom(scroller);
-  const shouldShowButton = canScroll && !atBottom;
-  button.hidden = !shouldShowButton;
-  button.disabled = !shouldShowButton;
-}
-
 function captureOpenTurnDetails() {
   const open = new Map();
   detailEl.querySelectorAll('.turn[data-turn-id]').forEach((turn, index) => {
@@ -382,84 +333,6 @@ function restoreSessionDetailsOpen(open) {
   const details = detailEl.querySelector('.session-meta');
   if (details) details.open = Boolean(open);
 }
-function captureScrollAnchor(scroller) {
-  if (!scroller) return null;
-  const turns = [...scroller.querySelectorAll('.turn[data-turn-id]')];
-  const top = scroller.getBoundingClientRect().top;
-  let best = null;
-  for (const turn of turns) {
-    const rect = turn.getBoundingClientRect();
-    if (rect.bottom < top) continue;
-    best = {
-      turnId: turn.dataset.turnId,
-      offset: rect.top - top,
-    };
-    break;
-  }
-  return best;
-}
-
-function restoreScrollAnchor(scroller, anchor, fallbackScrollTop = 0) {
-  if (!scroller) return;
-  if (!anchor?.turnId) {
-    markProgrammaticScroll();
-    scroller.scrollTop = fallbackScrollTop;
-    return;
-  }
-  const target = scroller.querySelector(`.turn[data-turn-id="${CSS.escape(anchor.turnId)}"]`);
-  if (!target) {
-    markProgrammaticScroll();
-    scroller.scrollTop = fallbackScrollTop;
-    return;
-  }
-  const top = scroller.getBoundingClientRect().top;
-  const rect = target.getBoundingClientRect();
-  markProgrammaticScroll();
-  scroller.scrollTop += rect.top - top - anchor.offset;
-}
-
-function restoreDetailScrollState(scroller, {
-  anchor,
-  fallbackScrollTop = 0,
-  followBottom = false,
-  requestSeq = detailRequestSeq,
-  stabilitySeq = scrollStabilitySeq,
-} = {}) {
-  if (!scroller) return;
-  if (followBottom) scrollElementToBottom(scroller, { requestSeq, stabilitySeq });
-  else restoreScrollAnchor(scroller, anchor, fallbackScrollTop);
-  updateJumpBottomButton(scroller);
-}
-
-function stabilizeScrollAfterMediaLayout(scroller, requestSeq, anchor, fallbackScrollTop, stabilitySeq) {
-  if (!scroller || !anchor?.turnId) return;
-  const restore = () => {
-    if (requestSeq !== detailRequestSeq) return;
-    if (stabilitySeq !== scrollStabilitySeq) return;
-    restoreDetailScrollState(scroller, { anchor, fallbackScrollTop, requestSeq, stabilitySeq });
-  };
-  requestAnimationFrame(() => requestAnimationFrame(restore));
-  scroller.querySelectorAll('img, video').forEach((media) => {
-    media.addEventListener('load', restore, { once: true });
-    media.addEventListener('loadedmetadata', restore, { once: true });
-  });
-}
-
-
-function bindDetailScrollControls() {
-  const scroller = detailEl.querySelector('.detail-shell .detail');
-  const button = detailEl.querySelector('.jump-bottom');
-  if (!scroller || !button) return;
-  scroller.addEventListener('scroll', () => updateJumpBottomButton(scroller), { passive: true });
-  scroller.addEventListener('wheel', markUserScrollIntent, { passive: true });
-  scroller.addEventListener('touchstart', markUserScrollIntent, { passive: true });
-  scroller.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
-  scroller.addEventListener('keydown', markUserScrollIntent);
-  button.addEventListener('click', () => scrollDetailToBottom());
-  updateJumpBottomButton(scroller);
-  requestAnimationFrame(() => updateJumpBottomButton(scroller));
-}
-
 function displayRepo(originUrl) {
   const text = String(originUrl ?? '').trim();
   if (!text) return 'no repo';
@@ -1609,11 +1482,11 @@ async function loadDetail(id, { quiet = false } = {}) {
   const previousId = activeSession.id;
   const previousScroller = detailEl.querySelector('.detail-shell .detail');
   const previousScrollTop = previousScroller?.scrollTop ?? 0;
-  const scrollAnchor = quiet && id === previousId ? captureScrollAnchor(previousScroller) : null;
-  const scrollRestoreSeq = scrollStabilitySeq;
+  const scrollAnchor = quiet && id === previousId ? detailScroll.captureScrollAnchor(previousScroller) : null;
+  const scrollRestoreSeq = detailScroll.stabilitySeq;
   const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
   const sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
-  const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && isNearBottom(previousScroller);
+  const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && detailScroll.isNearBottom(previousScroller);
   const previousForm = detailEl.querySelector('#promptForm');
   const preservePromptForm = quiet && id === previousId && previousForm;
   const draftPrompt = quiet && id === previousId ? previousForm?.elements?.prompt?.value ?? '' : '';
@@ -1660,17 +1533,17 @@ async function loadDetail(id, { quiet = false } = {}) {
     restoreSessionDetailsOpen(sessionDetailsOpen);
     bindCodeCopyControls(detailEl);
     bindSessionImageViewer(detailEl, openImageLightbox);
-    bindDetailScrollControls();
+    detailScroll.bindControls();
     requestAnimationFrame(() => {
       const scroller = detailEl.querySelector('.detail-shell .detail');
-      restoreDetailScrollState(scroller, {
+      detailScroll.restoreState(scroller, {
         anchor: scrollAnchor,
         fallbackScrollTop: previousScrollTop,
         followBottom: !quiet || shouldContinueFollowing,
         requestSeq,
         stabilitySeq: scrollRestoreSeq,
       });
-      if (quiet && !shouldContinueFollowing) stabilizeScrollAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop, scrollRestoreSeq);
+      if (quiet && !shouldContinueFollowing) detailScroll.stabilizeAfterMediaLayout(scroller, requestSeq, scrollAnchor, previousScrollTop, scrollRestoreSeq);
     });
   } catch (error) {
     if (requestSeq !== detailRequestSeq || id !== activeSession.id) return;
