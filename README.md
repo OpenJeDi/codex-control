@@ -100,7 +100,7 @@ Configuration can be set in the process environment or in a local `.env` file. P
 | `CODEX_CONTROL_ALLOW_UNAUTHENTICATED_NETWORK` | unset | Set to `1` only when you deliberately expose without built-in auth because another trusted layer protects access. |
 | `CODEX_CONTROL_FILE_SERVING` | `session` | Controls local file links. Use `session` for session-policy access or `system` to serve any local file path. |
 | `CODEX_CONTROL_DEV_RESTART` | unset | Set to `1` to enable the development-only `/api/codex/restart` endpoint. |
-| `CODEX_CONTROL_RESTART_TASK` | unset | Optional Windows Scheduled Task name used by the restart helper. |
+| `CODEX_CONTROL_RESTART_TASK` | unset | Optional Windows Scheduled Task name used by the stop/restart helpers. |
 
 See `.env.example` for a local environment template.
 
@@ -179,23 +179,25 @@ Available template variables:
 
 Path resolution uses the machine running Codex Control, not the browser machine.
 
-## Optional Restart Helper
+## Optional Service Helpers
 
-During development, restart the local server process however you normally manage local Node services.
+During development, stop or restart the local server process however you normally manage local Node services.
 
-An optional Windows helper is available for local environments that use a Windows Scheduled Task:
+Optional Windows helpers are available for local environments that use a Windows Scheduled Task:
 
 ```powershell
+npm stop
 npm run restart:windows
 ```
 
-The helper refuses to restart while sessions are active, because the current Codex Control server owns its `codex app-server` child process and stopping Node interrupts active turns. Use an explicit forced restart only when interruption is intentional:
+The helpers refuse to stop or restart while sessions are active, because the current Codex Control server owns its `codex app-server` child process and stopping Node interrupts active turns. Use an explicit forced stop or restart only when interruption is intentional:
 
 ```powershell
+npm run stop:windows:force
 npm run restart:windows:force
 ```
 
-Set `CODEX_CONTROL_RESTART_TASK` when the scheduled task name is not the helper default.
+Set `CODEX_CONTROL_RESTART_TASK` when Codex Control is managed by a Windows Scheduled Task.
 
 ## Safety Notes
 

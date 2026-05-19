@@ -23,6 +23,14 @@ The restart helper stops existing `node src/server.mjs` processes, starts the se
 
 On Windows, set `CODEX_CONTROL_RESTART_TASK` to start an existing Scheduled Task instead of launching `node src/server.mjs` directly.
 
+To stop the local service without restarting it:
+
+```powershell
+npm stop
+```
+
+The stop helper uses the same active-session safety check as restart. Use `npm run stop:windows:force` only when interrupting active turns is intentional.
+
 ## Operational Gotchas
 
 - If sessions fail before the app receives useful output, check external account state before debugging the UI or server. Exhausted Codex/OpenAI credits, quota limits, expired auth, or model access changes can present as local app hangs or startup failures.

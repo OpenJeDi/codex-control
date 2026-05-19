@@ -1633,8 +1633,15 @@ function normalizeModelValue(value) {
   return text;
 }
 
+function stripPathLineSuffix(filePath) {
+  const text = String(filePath ?? '').trim();
+  const withoutFragment = text.replace(/#L\d+(?:-L?\d+)?$/i, '');
+  const match = withoutFragment.match(/^(.+[\\/][^\\/]+):\d+(?::\d+)?$/);
+  return match ? match[1] : withoutFragment;
+}
+
 function normalizeLocalFilePath(filePath) {
-  const target = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  const target = stripPathLineSuffix(String(filePath ?? '').trim().replace(/^<|>$/g, ''));
   if (!target || target.includes('\0')) return '';
   if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return path.win32.normalize(target);
   if (path.isAbsolute(target)) return path.normalize(target);
@@ -1642,10 +1649,10 @@ function normalizeLocalFilePath(filePath) {
 }
 
 function resolveRequestedMediaPath(filePath, cwd = '') {
-  const raw = String(filePath ?? '').trim().replace(/^<|>$/g, '');
+  const raw = stripPathLineSuffix(String(filePath ?? '').trim().replace(/^<|>$/g, ''));
   const root = normalizeLocalFilePath(cwd);
-  if (root && /^(?:\.\.\.|…|\.)(?:[\\/])/.test(raw)) {
-    const relative = raw.replace(/^(?:\.\.\.|…|\.)(?:[\\/])/, '');
+  if (root && /^(?:\.\.\.|\u2026|\.)(?:[\\/])/.test(raw)) {
+    const relative = raw.replace(/^(?:\.\.\.|\u2026|\.)(?:[\\/])/, '');
     return path.win32.normalize(path.win32.join(root, relative));
   }
   if (root

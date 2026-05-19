@@ -21,24 +21,32 @@ export function renderCompactDetailsItem({ type = 'item', label = 'Item', body =
   </article>`;
 }
 
-export function renderMarkdownMedia(src, label = '', embedded = false) {
+export function renderMarkdownMedia(src, label = '', embedded = false, options = {}) {
   const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
+  const href = localMediaPathHref(cleanSrc, options) || cleanSrc;
   const caption = escapeHtml(label || 'media');
-  const kind = mediaKindFromSrc(cleanSrc);
+  const kind = mediaKindFromSrc(href);
   if (embedded && kind === 'image') {
-    return renderSessionImageFigure(cleanSrc, label || 'media', label || 'Session image');
+    return renderSessionImageFigure(href, label || 'media', label || 'Session image');
   }
   if (embedded && kind === 'video') {
-    return `<figure class="session-image session-video"><video src="${escapeAttribute(cleanSrc)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
+    return `<figure class="session-image session-video"><video src="${escapeAttribute(href)}" controls preload="metadata"></video><figcaption>${caption}</figcaption></figure>`;
   }
-  return `<a href="${escapeAttribute(cleanSrc)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
+  return `<a href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
+}
+
+function stripPathLineSuffix(value) {
+  const text = String(value ?? '').trim();
+  const withoutFragment = text.replace(/#L\d+(?:-L?\d+)?$/i, '');
+  const match = withoutFragment.match(/^(.+[\\/][^\\/]+):\d+(?::\d+)?$/);
+  return match ? match[1] : withoutFragment;
 }
 
 function localMediaPathHref(filePath, options = {}) {
-  const rawPath = String(filePath ?? '').trim().replace(/^["']|["']$/g, '');
+  const rawPath = stripPathLineSuffix(String(filePath ?? '').trim().replace(/^["']|["']$/g, ''));
   if (!rawPath) return '';
   const isAbsolute = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(rawPath);
-  const isCwdRelative = /^(?:\.\.\.|…|\.)(?:[\\/])/.test(rawPath);
+  const isCwdRelative = /^(?:\.\.\.|\u2026|\.)(?:[\\/])/.test(rawPath);
   const isPlainRelative = !isAbsolute
     && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath)
     && !/^[\\/]/.test(rawPath)
@@ -69,7 +77,7 @@ export function renderInlineMarkdown(text, options = {}) {
   };
   const pushLink = (href, label = href) => {
     const token = `@@LINK${links.length}@@`;
-    links.push(renderMarkdownMedia(href, label, false));
+    links.push(renderMarkdownMedia(href, label, false, options));
     return token;
   };
   let html = String(text ?? '').replace(/`([^`]+)`/g, (_match, code) => {
@@ -78,7 +86,7 @@ export function renderInlineMarkdown(text, options = {}) {
     return pushCodeSpan(code);
   }).replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (_match, alt, src) => {
     const token = `@@MEDIA${media.length}@@`;
-    media.push(renderMarkdownMedia(src, alt, true));
+    media.push(renderMarkdownMedia(src, alt, true, options));
     return token;
   }).replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_match, label, url) => {
     return pushLink(url, label);
@@ -201,7 +209,7 @@ export function renderMarkdownBlocks(text, options = {}) {
 
 export function renderCodeBlockContent(code, options = {}) {
   const source = String(code ?? '');
-  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+)/g;
+  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\|\.{1,2}[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)/g;
   let html = '';
   let lastIndex = 0;
   for (const match of source.matchAll(pathPattern)) {
