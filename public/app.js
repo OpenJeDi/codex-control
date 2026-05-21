@@ -2065,14 +2065,16 @@ function renderTurn(turn, index, thread) {
   const effort = effortFromValue(turn);
   const summary = turnSummary(turn);
   const renderOptions = { cwd: thread?.cwd || '' };
+  const turnBreak = renderTurnBreak(turn, statusValue, threadBusy);
   const innerItems = [
     `<div class="meta"><span class="badge">${escapeHtml(turn.id)}</span></div>`,
     ...(summary.hiddenItems ?? []).map((item) => renderItem(item, renderOptions)),
-    renderTurnBreak(turn, statusValue, threadBusy),
+    turnBreak,
   ].filter(Boolean);
   const visibleSteeredMessages = (turn.steeredMessages ?? []).map((message) => renderSteeredMessage(message, renderOptions)).join('');
-  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || Boolean(renderTurnBreak(turn, statusValue, threadBusy));
+  const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || Boolean(turnBreak);
   const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
+  const intermediateOpen = activeLatestTurn ? ' open' : '';
   return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
     <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
     <div class="turn-compact">
@@ -2081,7 +2083,7 @@ function renderTurn(turn, index, thread) {
         ${summary.promptItem ? renderContentParts(summary.promptItem, summary.prompt || '(no prompt text)', renderOptions) : renderMarkdownText(summary.prompt || '(no prompt text)', renderOptions)}
       </article>
       ${visibleSteeredMessages}
-      ${hasInnerItems ? `<details class="turn-details">
+      ${hasInnerItems ? `<details class="turn-details"${intermediateOpen}>
         <summary>Intermediate activity</summary>
         <div class="turn-full">${innerItems.join('')}</div>
       </details>` : ''}
