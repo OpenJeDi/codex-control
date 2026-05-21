@@ -2063,7 +2063,7 @@ function renderTurn(turn, index, thread) {
   const status = String(statusValue ?? '').toLowerCase();
   const model = modelFromValue(turn);
   const effort = effortFromValue(turn);
-  const summary = turnSummary(turn);
+  const summary = turnSummary(turn, { keepCommentaryIntermediate: activeLatestTurn });
   const renderOptions = { cwd: thread?.cwd || '' };
   const turnBreak = renderTurnBreak(turn, statusValue, threadBusy);
   const innerItems = [
@@ -2107,11 +2107,12 @@ function textForItem(item) {
   return item.text || '';
 }
 
-function turnSummary(turn) {
+function turnSummary(turn, { keepCommentaryIntermediate = false } = {}) {
   const items = turn.items ?? [];
   const userItem = items.find((item) => item.type === 'userMessage');
   const agentItems = items.filter((item) => item.type === 'agentMessage');
-  const finalAgent = [...agentItems].reverse().find((item) => item.phase !== 'commentary') ?? agentItems[agentItems.length - 1];
+  const nonCommentaryAgent = [...agentItems].reverse().find((item) => item.phase !== 'commentary');
+  const finalAgent = nonCommentaryAgent ?? (keepCommentaryIntermediate ? null : agentItems[agentItems.length - 1]);
   return {
     prompt: textForItem(userItem),
     response: textForItem(finalAgent),
