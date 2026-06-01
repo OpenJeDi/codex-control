@@ -8,7 +8,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { createRequireAuth, createRequireWriteAccess, isLoopbackHost, normalizeAuthSettings } from './http/auth.mjs';
-import { isPathInside, normalizeLocalFilePath, resolveRequestedMediaPath } from './media/localPaths.mjs';
+import { isPathInside, normalizeLocalFilePath } from './media/localPaths.mjs';
 import { hostPlatform } from './platform/index.mjs';
 import { createTranscriptMediaHelpers } from './transcript/media.js';
 import { createTranscriptNormalizer, textFromContent, truncate } from './transcript/normalize.js';
@@ -20,6 +20,9 @@ const publicDir = path.join(rootDir, 'public');
 const configPath = path.join(rootDir, 'codex-control.config.json');
 const port = Number(process.env.PORT || 4567);
 const host = process.env.HOST || '127.0.0.1';
+const httpKeepAliveTimeoutMs = positiveInteger(process.env.CODEX_CONTROL_HTTP_KEEP_ALIVE_TIMEOUT_MS, 75_000);
+const httpHeadersTimeoutMs = Math.max(positiveInteger(process.env.CODEX_CONTROL_HTTP_HEADERS_TIMEOUT_MS, httpKeepAliveTimeoutMs + 5_000), httpKeepAliveTimeoutMs + 1_000);
+const eventHeartbeatMs = positiveInteger(process.env.CODEX_CONTROL_EVENT_HEARTBEAT_MS, 25_000);
 const restartTaskName = String(process.env.CODEX_CONTROL_RESTART_TASK || '').trim();
 const readOnlyMode = ['1', 'true', 'yes', 'on'].includes(String(process.env.CODEX_CONTROL_READ_ONLY || '').trim().toLowerCase());
 const fileServingMode = normalizeFileServingMode(process.env.CODEX_CONTROL_FILE_SERVING || (process.env.CODEX_CONTROL_SERVE_SYSTEM_FILES ? 'system' : 'session'));
@@ -273,7 +276,9 @@ class CodexAppServer {
       || message.includes('broken pipe')
       || message.includes('write after end')
       || message.includes('stream has been destroyed')
-      || message.includes('cannot call write');
+      || message.includes('cannot call write')
+      || message.includes('stdin is not writable')
+      || message.includes('timed out waiting for');
   }
 
   async request(method, params = {}, timeoutMs = 15000, options = {}) {
@@ -384,17 +389,19 @@ class CodexAppServer {
 
     let resolvedTurns = turnData;
     let resolvedThread = thread;
+    const rolloutInfo = await getRolloutModelInfo(read.thread?.path, threadId, this.codexHome);
 
-    if (shouldUseRolloutModelHints(read.thread, turnData)) {
-      const rolloutModelInfo = await getRolloutModelInfo(read.thread?.path, threadId, this.codexHome);
-      if (rolloutModelInfo) {
-        resolvedTurns = applyRolloutModelHints(turnData, rolloutModelInfo);
-        resolvedThread = applyRolloutModelHintsToThread(thread, rolloutModelInfo, resolvedTurns);
-        if (modelSource === 'codex' && hasMissingTurnModelFromCodex) {
-          modelSource = 'mixed';
-        } else if (modelSource === 'unknown') {
-          modelSource = hasAnyTurnFromCodex ? 'mixed' : 'rollout';
-        }
+    if (rolloutInfo) {
+      resolvedTurns = mergeRolloutIntermediateItems(resolvedTurns, rolloutInfo);
+    }
+
+    if (rolloutInfo && shouldUseRolloutModelHints(read.thread, turnData)) {
+      resolvedTurns = applyRolloutModelHints(resolvedTurns, rolloutInfo);
+      resolvedThread = applyRolloutModelHintsToThread(thread, rolloutInfo, resolvedTurns);
+      if (modelSource === 'codex' && hasMissingTurnModelFromCodex) {
+        modelSource = 'mixed';
+      } else if (modelSource === 'unknown') {
+        modelSource = hasAnyTurnFromCodex ? 'mixed' : 'rollout';
       }
     }
 
@@ -715,6 +722,24 @@ class CodexAppServer {
     return current.map((message) => normalizeQueuedMessage(message, mediaPolicy));
   }
 
+  editQueuedMessage(threadId, turnId, prompt) {
+    const key = String(threadId);
+    const current = [...(this.queuedMessagesByThread.get(key) ?? [])];
+    const index = current.findIndex((message) => String(message.turnId) === String(turnId));
+    if (index === -1) throw new Error('Queued message not found.');
+    const existing = current[index];
+    const input = replaceTextInput(existing.input, prompt);
+    if (!input.length) throw new Error('Queued message cannot be empty.');
+    current[index] = {
+      ...existing,
+      input,
+      text: truncate(textFromContent(input), 1600),
+      updatedAt: Date.now(),
+    };
+    this.queuedMessagesByThread.set(key, current);
+    return normalizeQueuedMessage(current[index], this.mediaPolicyForThreadId(threadId));
+  }
+
   async steerQueuedMessage(threadId, turnId) {
     const key = String(threadId);
     const current = this.queuedMessagesByThread.get(key) ?? [];
@@ -786,14 +811,40 @@ class CodexAppServer {
 
   addEventClient(res) {
     const id = randomUUID();
-    this.eventClients.add(res);
-    res.write(`event: ready\ndata: ${JSON.stringify({ id })}\n\n`);
-    return () => this.eventClients.delete(res);
+    const client = { id, res, heartbeat: null, closed: false };
+    const cleanup = () => {
+      if (client.closed) return;
+      client.closed = true;
+      clearInterval(client.heartbeat);
+      this.eventClients.delete(client);
+    };
+    client.cleanup = cleanup;
+    client.heartbeat = setInterval(() => {
+      if (!this.writeEventClient(client, `: keep-alive ${Date.now()}\n\n`)) cleanup();
+    }, eventHeartbeatMs);
+    client.heartbeat.unref?.();
+    res.on('close', cleanup);
+    res.on('error', cleanup);
+    this.eventClients.add(client);
+    this.writeEventClient(client, `retry: 3000\nevent: ready\ndata: ${JSON.stringify({ id })}\n\n`);
+    return cleanup;
+  }
+
+  writeEventClient(client, data) {
+    if (!client || client.closed || client.res.destroyed || client.res.writableEnded) return false;
+    try {
+      client.res.write(data);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   broadcast(event, payload) {
     const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-    for (const client of this.eventClients) client.write(data);
+    for (const client of [...this.eventClients]) {
+      if (!this.writeEventClient(client, data)) client.cleanup?.();
+    }
   }
 
   watchCodexHome(codexHome) {
@@ -842,6 +893,11 @@ function isTurnsNotReadyError(error) {
 function isActiveTurnStatus(status) {
   const text = String(status ?? '').toLowerCase();
   return text === 'inprogress' || text === 'in_progress' || text === 'running';
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
 function loadDotEnv(filePath) {
@@ -967,8 +1023,10 @@ function getRolloutTurnId(event) {
 async function readRolloutModelInfo(filePath) {
   const turnModels = new Map();
   const turnEfforts = new Map();
+  const turnItems = new Map();
   let threadModel = '';
   let threadEffort = '';
+  let currentTurnId = '';
   const seenTurnModels = new Map();
   const seenTurnEfforts = new Map();
 
@@ -988,6 +1046,14 @@ async function readRolloutModelInfo(filePath) {
       }
 
       const payload = event.payload ?? event;
+      if (event?.type === 'turn_context') {
+        currentTurnId = getRolloutTurnId(event);
+      }
+      if (event?.type === 'response_item' && currentTurnId && isRolloutIntermediateItem(payload)) {
+        const current = turnItems.get(currentTurnId) ?? [];
+        current.push(payload);
+        turnItems.set(currentTurnId, current);
+      }
       const model = extractModelFromPayload(payload);
       const effort = extractEffortFromPayload(payload);
       const turnId = getRolloutTurnId(event);
@@ -1016,10 +1082,54 @@ async function readRolloutModelInfo(filePath) {
     threadEffort,
     turnModels,
     turnEfforts,
+    turnItems,
   };
 }
 
 const rolloutModelInfoCache = new Map();
+
+function isRolloutIntermediateItem(item = {}) {
+  const type = String(item?.type ?? '').toLowerCase();
+  if (type === 'function_call' || type === 'function_call_output') return true;
+  if (type === 'custom_tool_call' || type === 'custom_tool_call_output') return true;
+  if (type === 'reasoning') return true;
+  if (type !== 'message') return false;
+  const role = String(item.role ?? '').toLowerCase();
+  const phase = String(item.phase ?? '').toLowerCase();
+  return role === 'assistant' && phase && phase !== 'final_answer';
+}
+
+function mergeRolloutIntermediateItems(turns, rolloutInfo) {
+  const turnItems = rolloutInfo?.turnItems;
+  if (!turnItems?.size || !turns?.length) return turns;
+  return turns.map((turn) => {
+    if (!turn?.id) return turn;
+    const extraItems = turnItems.get(String(turn.id)) ?? [];
+    if (!extraItems.length) return turn;
+    const items = turn.items ?? [];
+    if (items.some((item) => isExistingIntermediateItem(item))) return turn;
+    const userIndex = items.findIndex((item) => item.type === 'userMessage' || (item.type === 'message' && item.role === 'user'));
+    const insertAt = userIndex === -1 ? 0 : userIndex + 1;
+    const before = items.slice(0, insertAt);
+    const after = items.slice(insertAt);
+    return {
+      ...turn,
+      items: [...before, ...extraItems, ...after],
+    };
+  });
+}
+
+function isExistingIntermediateItem(item = {}) {
+  const type = String(item.type ?? '').toLowerCase();
+  if (type === 'usermessage') return false;
+  if (type === 'agentmessage' && String(item.phase ?? '').toLowerCase() !== 'commentary') return false;
+  if (type === 'message') {
+    const role = String(item.role ?? '').toLowerCase();
+    const phase = String(item.phase ?? '').toLowerCase();
+    return role !== 'user' && phase !== 'final_answer';
+  }
+  return type !== 'agentmessage';
+}
 
 function applyRolloutModelHints(turns, rolloutInfo) {
   if (!rolloutInfo || !turns?.length) return turns;
@@ -1146,8 +1256,13 @@ function gitArgs(cwd, args = []) {
   return ['-c', `safe.directory=${hostPlatform.gitSafeDirectory(cwd)}`, '-C', cwd, ...args];
 }
 
+function gitArgsWithoutSafeDirectory(cwd, args = []) {
+  return ['-C', cwd, ...args];
+}
+
 const defaultConfig = {
   workspaceRoots: [],
+  requiredWorktreeRoot: '',
   defaultWorktreeWorkflow: 'auto-sibling',
   worktreeWorkflows: {
     'auto-sibling': {
@@ -1165,6 +1280,7 @@ async function appConfig() {
       ...defaultConfig,
       ...parsed,
       workspaceRoots: Array.isArray(parsed.workspaceRoots) ? parsed.workspaceRoots : defaultConfig.workspaceRoots,
+      requiredWorktreeRoot: String(parsed.requiredWorktreeRoot ?? defaultConfig.requiredWorktreeRoot),
       worktreeWorkflows: {
         ...defaultConfig.worktreeWorkflows,
         ...(parsed.worktreeWorkflows && typeof parsed.worktreeWorkflows === 'object' ? parsed.worktreeWorkflows : {}),
@@ -1184,6 +1300,10 @@ const configTemplateVariables = new Set([
   'sourceParent',
   'sourceName',
   'autoWorktreeRoot',
+  'canonicalWorktreeRoot',
+  'requiredWorktreeRoot',
+  'gitCommonDir',
+  'gitDir',
   'branchName',
   'branchFolder',
 ]);
@@ -1199,6 +1319,11 @@ function validateAppConfig(config) {
       warnings.push('workspaceRoots contains an empty entry.');
     } else if (!existsSync(text)) {
       warnings.push(`Workspace root does not exist on the server host: ${text}`);
+    }
+  }
+  for (const variable of templateVariablesIn(config.requiredWorktreeRoot)) {
+    if (!configTemplateVariables.has(variable)) {
+      warnings.push(`requiredWorktreeRoot uses unknown template variable {${variable}}.`);
     }
   }
 
@@ -1244,6 +1369,7 @@ function repoNameFromSourcePath(sourcePath) {
   const parent = hostPlatform.dirname(sourcePath);
   const parentName = hostPlatform.basename(parent);
   if (parentName.toLowerCase() === 'worktrees') return hostPlatform.basename(hostPlatform.dirname(parent));
+  if (parentName.toLowerCase().endsWith('-worktrees')) return parentName.replace(/-worktrees$/i, '');
   return sourceName;
 }
 
@@ -1251,51 +1377,153 @@ function renderConfigTemplate(template, context) {
   return String(template ?? '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => context[key] ?? '');
 }
 
+function hostResolvedPath(value, base = process.cwd()) {
+  return hostPlatform.resolvePathFromCwd(base, value);
+}
+
+function hostPathCompareValue(value) {
+  const resolved = hostResolvedPath(value);
+  return hostPlatform.family === 'windows' ? resolved.toLowerCase() : resolved;
+}
+
+function sameHostPath(left, right) {
+  return hostPathCompareValue(left) === hostPathCompareValue(right);
+}
+
 function configuredWorkspaceRoot(sourcePath, config) {
   const roots = (config.workspaceRoots ?? []).map((root) => String(root ?? '').trim()).filter(Boolean);
   if (!roots.length) return '';
-  const source = hostPlatform.resolvePathFromCwd(process.cwd(), sourcePath);
+  const source = hostResolvedPath(sourcePath);
   const matches = roots
-    .map((root) => hostPlatform.resolvePathFromCwd(process.cwd(), root))
-    .filter((root) => source.toLowerCase().startsWith(root.toLowerCase()))
+    .map((root) => hostResolvedPath(root))
+    .filter((root) => isPathInside(root, source))
     .sort((a, b) => b.length - a.length);
   return matches[0] ?? roots[0];
 }
 
-function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
-  const workflowId = String(config.defaultWorktreeWorkflow || defaultConfig.defaultWorktreeWorkflow);
-  const workflow = config.worktreeWorkflows?.[workflowId] ?? defaultConfig.worktreeWorkflows['auto-sibling'];
+function repoNameFromGitCommonDir(gitCommonDir, fallbackSourcePath = '') {
+  const base = hostPlatform.basename(gitCommonDir);
+  if (!base) return repoNameFromSourcePath(fallbackSourcePath);
+  if (base.toLowerCase() === '.git') return hostPlatform.basename(hostPlatform.dirname(gitCommonDir));
+  if (base.toLowerCase().endsWith('.git')) return base.slice(0, -4);
+  return base;
+}
+
+function canonicalWorktreeRootFromGitCommonDir(gitCommonDir) {
+  const base = hostPlatform.basename(gitCommonDir);
+  if (!base || base.toLowerCase() === '.git' || !base.toLowerCase().endsWith('.git')) return '';
+  return hostPlatform.joinPath(hostPlatform.dirname(gitCommonDir), `${base.slice(0, -4)}-worktrees`);
+}
+
+async function gitWorktreeContextForCwd(cwd) {
+  const sourcePath = hostResolvedPath(cwd);
+  const [worktreeRootText, gitDirText, gitCommonDirText] = await Promise.all([
+    execFileText('git', gitArgs(sourcePath, ['rev-parse', '--show-toplevel'])),
+    execFileText('git', gitArgs(sourcePath, ['rev-parse', '--git-dir'])),
+    execFileText('git', gitArgs(sourcePath, ['rev-parse', '--git-common-dir'])),
+  ]);
+  const worktreeRoot = resolveGitPath(sourcePath, worktreeRootText.trim()) || sourcePath;
+  const gitDir = resolveGitPath(sourcePath, gitDirText.trim());
+  const gitCommonDir = resolveGitPath(sourcePath, gitCommonDirText.trim());
+  const isLinkedWorktree = Boolean(gitDir && gitCommonDir && !sameHostPath(gitDir, gitCommonDir));
+  const canonicalWorktreeRoot = canonicalWorktreeRootFromGitCommonDir(gitCommonDir);
+  return {
+    sourcePath,
+    worktreeRoot,
+    gitDir,
+    gitCommonDir,
+    isLinkedWorktree,
+    canonicalWorktreeRoot,
+    repoName: repoNameFromGitCommonDir(gitCommonDir, worktreeRoot),
+  };
+}
+
+function worktreeTemplateContext(sourcePath, branch, config, gitContext = {}) {
   const autoWorktreeRoot = repoWorktreeRoot(sourcePath);
   const workspaceRoot = configuredWorkspaceRoot(sourcePath, config);
-  const context = {
+  return {
     sourcePath,
     sourceName: hostPlatform.basename(sourcePath),
     sourceParent: hostPlatform.dirname(sourcePath),
-    repoName: repoNameFromSourcePath(sourcePath),
+    repoName: gitContext.repoName || repoNameFromSourcePath(sourcePath),
     branchName: String(branch ?? ''),
     branchFolder: branchFolderName(branch),
     autoWorktreeRoot,
     workspaceRoot,
+    canonicalWorktreeRoot: gitContext.canonicalWorktreeRoot || '',
+    requiredWorktreeRoot: '',
+    gitCommonDir: gitContext.gitCommonDir || '',
+    gitDir: gitContext.gitDir || '',
+    isLinkedWorktree: Boolean(gitContext.isLinkedWorktree),
   };
+}
+
+function configuredRequiredWorktreeRoot(context, config) {
+  const template = String(config.requiredWorktreeRoot ?? '').trim();
+  if (template) {
+    const rendered = renderConfigTemplate(template, context).trim();
+    return rendered ? hostResolvedPath(rendered, context.sourceParent) : '';
+  }
+  if (context.isLinkedWorktree && context.canonicalWorktreeRoot) return context.canonicalWorktreeRoot;
+  return '';
+}
+
+function validateTargetUnderRequiredRoot(targetPath, requiredRoot) {
+  if (!requiredRoot || isPathInside(requiredRoot, targetPath)) return;
+  throw new Error(`Worktree target is outside the required worktree root. Target: ${targetPath}. Required root: ${requiredRoot}`);
+}
+
+function assertTemplateCanRender(template, context) {
+  if (templateVariablesIn(template).includes('requiredWorktreeRoot') && !context.requiredWorktreeRoot) {
+    throw new Error('This worktree workflow uses {requiredWorktreeRoot}, but no required worktree root could be inferred or configured for the source worktree.');
+  }
+}
+
+async function configuredWorktreeTarget(sourcePath, branch, requestedRoot, config) {
+  const workflowId = String(config.defaultWorktreeWorkflow || defaultConfig.defaultWorktreeWorkflow);
+  const workflow = config.worktreeWorkflows?.[workflowId] ?? defaultConfig.worktreeWorkflows['auto-sibling'];
+  const gitContext = await gitWorktreeContextForCwd(sourcePath);
+  const baseContext = worktreeTemplateContext(gitContext.worktreeRoot || sourcePath, branch, config, gitContext);
+  const requiredWorktreeRoot = configuredRequiredWorktreeRoot(baseContext, config);
+  const context = { ...baseContext, requiredWorktreeRoot };
 
   const explicitRoot = String(requestedRoot ?? '').trim();
   if (explicitRoot) {
-    const targetRoot = hostPlatform.resolvePathFromCwd(context.sourceParent, renderConfigTemplate(explicitRoot, context));
+    assertTemplateCanRender(explicitRoot, context);
+    const targetRoot = hostResolvedPath(renderConfigTemplate(explicitRoot, context), context.sourceParent);
+    const targetPath = hostPlatform.joinPath(targetRoot, context.branchName);
+    validateTargetUnderRequiredRoot(targetPath, requiredWorktreeRoot);
     return {
       workflowId: 'custom-root',
       workflowLabel: 'Custom root',
-      workspaceRoot,
+      workspaceRoot: context.workspaceRoot,
+      requiredWorktreeRoot,
       targetRoot,
-      targetPath: hostPlatform.joinPath(targetRoot, context.branchName),
+      targetPath,
+    };
+  }
+
+  if (requiredWorktreeRoot) {
+    const targetPath = hostPlatform.joinPath(requiredWorktreeRoot, context.branchName);
+    return {
+      workflowId: 'required-root',
+      workflowLabel: 'Required worktree root',
+      workspaceRoot: context.workspaceRoot,
+      requiredWorktreeRoot,
+      targetRoot: requiredWorktreeRoot,
+      targetPath,
     };
   }
 
   const template = workflow.branchWorktree || defaultConfig.worktreeWorkflows['auto-sibling'].branchWorktree;
-  const targetPath = hostPlatform.resolvePathFromCwd(context.sourceParent, renderConfigTemplate(template, context));
+  assertTemplateCanRender(template, context);
+  const targetPath = hostResolvedPath(renderConfigTemplate(template, context), context.sourceParent);
+  validateTargetUnderRequiredRoot(targetPath, requiredWorktreeRoot);
   return {
     workflowId,
     workflowLabel: workflow.label || workflowId,
-    workspaceRoot,
+    workspaceRoot: context.workspaceRoot,
+    requiredWorktreeRoot,
     targetRoot: hostPlatform.dirname(targetPath),
     targetPath,
   };
@@ -1321,6 +1549,7 @@ async function worktreesForRepo(repoUrl) {
   const listedThreads = await codex.listThreads({ includeArchived: true, limit: 500 });
   const repoThreads = await hydrateThreadCwds(listedThreads.filter((thread) => threadMatchesRepo(thread, repo)), { concurrency: 2 });
   const threadsByCwd = await threadsByCwdMap([...listedThreads.map(withRememberedCwd), ...repoThreads]);
+  const config = await appConfig();
   const candidates = repoThreads
     .map((thread) => thread.cwd || rememberedThreadCwd(thread))
     .filter(Boolean);
@@ -1342,10 +1571,22 @@ async function worktreesForRepo(repoUrl) {
       return {
         repo,
         source: cwd,
-        worktrees: await Promise.all(parseWorktreeList(output).map(async (worktree) => ({
-          ...worktree,
-          session: threadsByCwd.get(await pathKey(worktree.path)) ?? null,
-        }))),
+        worktrees: await Promise.all(parseWorktreeList(output).map(async (worktree) => {
+          const validation = worktree.bare
+            ? { ok: true, blockedLabel: '', blockedReason: '' }
+            : await validateWorktreePathForUse(worktree.path, config).catch((error) => ({
+              ok: false,
+              blockedLabel: 'validation failed',
+              blockedReason: error.message,
+            }));
+          return {
+            ...worktree,
+            validation,
+            blockedLabel: validation.ok ? '' : validation.blockedLabel,
+            blockedReason: validation.ok ? '' : validation.blockedReason,
+            session: threadsByCwd.get(await pathKey(worktree.path)) ?? null,
+          };
+        })),
       };
     } catch {
       // Try the next known cwd.
@@ -1468,7 +1709,17 @@ function normalizeQueuedMessage(message, mediaPolicy = {}) {
     text: message.text,
     attachments: attachmentsFromInput(message.input, mediaPolicy),
     createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
   };
+}
+
+function replaceTextInput(input = [], prompt = '') {
+  const text = String(prompt ?? '').trim();
+  const attachments = (Array.isArray(input) ? input : []).filter((part) => !(part?.type === 'text' || part?.type === 'input_text' || part?.text || part?.value));
+  return [
+    ...(text ? [{ type: 'text', text }] : []),
+    ...attachments,
+  ];
 }
 
 function attachmentsFromInput(input = [], mediaPolicy = {}) {
@@ -1653,14 +1904,22 @@ function canServeLocalFilePath(filePath, policy = {}) {
   if (fileServingMode === 'system') return true;
   const sandboxPolicy = normalizeSandboxPolicyValue(policy?.sandboxPolicy) || 'workspaceWrite';
   if (sandboxPolicy === 'dangerFullAccess') return true;
-  return Boolean(policy?.cwd && isPathInside(policy.cwd, target));
+  const roots = [
+    policy?.cwd,
+    ...(Array.isArray(policy?.allowedRoots) ? policy.allowedRoots : []),
+  ].filter(Boolean);
+  return roots.some((root) => isPathInside(root, target));
 }
 
 function localFileScope(_filePath, policy = {}) {
   if (fileServingMode === 'system') return 'system';
+  const roots = [
+    policy?.cwd,
+    ...(Array.isArray(policy?.allowedRoots) ? policy.allowedRoots : []),
+  ].filter(Boolean).map((root) => normalizeLocalFilePath(root)).filter(Boolean);
   return normalizeSandboxPolicyValue(policy?.sandboxPolicy) === 'dangerFullAccess'
     ? 'dangerFullAccess'
-    : `workspace:${normalizeLocalFilePath(policy?.cwd)}`;
+    : `workspace:${[...new Set(roots)].join(';')}`;
 }
 
 function includes(haystack, needle) {
@@ -1791,6 +2050,89 @@ function repoWorktreeRoot(sourcePath) {
   return hostPlatform.defaultWorktreeRoot(sourcePath);
 }
 
+function gitErrorSummary(error) {
+  const lines = String(error?.stderr || error?.stdout || error?.message || error || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines[0] || 'Git command failed.';
+}
+
+function gitAccessBlockedLabel(error) {
+  const text = String(`${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`).toLowerCase();
+  if (text.includes('dubious ownership') || text.includes('safe.directory')) return 'dubious ownership';
+  return 'git access blocked';
+}
+
+async function normalGitAccessIssue(cwd) {
+  try {
+    await execFileText('git', gitArgsWithoutSafeDirectory(cwd, ['status', '--short', '--branch']));
+    return null;
+  } catch (error) {
+    return {
+      label: gitAccessBlockedLabel(error),
+      message: `Git cannot access this worktree normally: ${gitErrorSummary(error)}`,
+    };
+  }
+}
+
+async function validateWorktreePathForUse(cwd, config) {
+  const sourcePath = hostResolvedPath(cwd);
+  const issues = [];
+  const labels = [];
+  if (!existsSync(sourcePath)) {
+    return {
+      ok: false,
+      blockedLabel: 'missing path',
+      blockedReason: `Worktree path does not exist: ${sourcePath}`,
+      sourcePath,
+    };
+  }
+
+  let gitContext = null;
+  try {
+    gitContext = await gitWorktreeContextForCwd(sourcePath);
+  } catch (error) {
+    return {
+      ok: false,
+      blockedLabel: 'not a git worktree',
+      blockedReason: `Git worktree metadata is unavailable: ${gitErrorSummary(error)}`,
+      sourcePath,
+    };
+  }
+
+  const baseContext = worktreeTemplateContext(gitContext.worktreeRoot || sourcePath, '', config, gitContext);
+  const requiredRoot = configuredRequiredWorktreeRoot(baseContext, config);
+  if (requiredRoot && !isPathInside(requiredRoot, gitContext.worktreeRoot)) {
+    labels.push('outside required root');
+    issues.push(`Worktree is outside the required root. Worktree: ${gitContext.worktreeRoot}. Required root: ${requiredRoot}`);
+  }
+
+  const accessIssue = await normalGitAccessIssue(gitContext.worktreeRoot || sourcePath);
+  if (accessIssue) {
+    labels.push(accessIssue.label);
+    issues.push(accessIssue.message);
+  }
+
+  return {
+    ok: issues.length === 0,
+    blockedLabel: [...new Set(labels)].join(', '),
+    blockedReason: issues.join(' '),
+    sourcePath,
+    worktreeRoot: gitContext.worktreeRoot,
+    gitCommonDir: gitContext.gitCommonDir,
+    canonicalWorktreeRoot: gitContext.canonicalWorktreeRoot,
+    requiredWorktreeRoot: requiredRoot,
+    repoName: gitContext.repoName,
+  };
+}
+
+async function requireUsableWorktreePath(cwd, config, label = 'Worktree') {
+  const validation = await validateWorktreePathForUse(cwd, config);
+  if (!validation.ok) throw new Error(`${label} is not usable. ${validation.blockedReason}`);
+  return validation;
+}
+
 async function buildWorktreePlan(body) {
   const sourcePath = String(body.sourcePath ?? '').trim();
   const rawBranch = String(body.branch ?? '').trim() || `feature-${cleanSlug(body.slug)}`;
@@ -1801,21 +2143,23 @@ async function buildWorktreePlan(body) {
 
   const targetRoot = String(body.targetRoot ?? '').trim();
   const config = await appConfig();
-  const target = configuredWorktreeTarget(sourcePath, branch, targetRoot, config);
+  const sourceValidation = await requireUsableWorktreePath(sourcePath, config, 'Source worktree');
+  const target = await configuredWorktreeTarget(sourcePath, branch, targetRoot, config);
   const targetPath = target.targetPath;
-  const existing = await execFileText('git', gitArgs(sourcePath, ['branch', '--list', branch]));
+  const existing = await execFileText('git', gitArgsWithoutSafeDirectory(sourcePath, ['branch', '--list', branch]));
   const branchExists = Boolean(existing.trim());
   const args = branchExists
-    ? gitArgs(sourcePath, ['worktree', 'add', targetPath, branch])
-    : gitArgs(sourcePath, ['worktree', 'add', '-b', branch, targetPath]);
+    ? gitArgsWithoutSafeDirectory(sourcePath, ['worktree', 'add', targetPath, branch])
+    : gitArgsWithoutSafeDirectory(sourcePath, ['worktree', 'add', '-b', branch, targetPath]);
   const display = hostPlatform.displayGitWorktreeAddCommand(sourcePath, targetPath, branch, { branchExists });
   return {
     sourcePath,
+    sourceValidation,
     branch,
     branchExists,
     targetRoot: target.targetRoot,
     targetPath,
-    workflow: { id: target.workflowId, label: target.workflowLabel, workspaceRoot: target.workspaceRoot },
+    workflow: { id: target.workflowId, label: target.workflowLabel, workspaceRoot: target.workspaceRoot, requiredWorktreeRoot: target.requiredWorktreeRoot },
     commands: [{ display, command: 'git', args }],
   };
 }
@@ -2109,6 +2453,7 @@ async function runtimeDiagnostics() {
       exists: config.exists,
       warnings: config.warnings ?? [],
       workspaceRoots: config.workspaceRoots,
+      requiredWorktreeRoot: config.requiredWorktreeRoot,
       defaultWorktreeWorkflow: config.defaultWorktreeWorkflow,
       worktreeWorkflows: Object.fromEntries(Object.entries(config.worktreeWorkflows ?? {}).map(([id, workflow]) => [id, { label: workflow?.label || id }])),
     },
@@ -2183,20 +2528,6 @@ function normalizeApprovalPolicyValue(value) {
   return ['untrusted', 'on-failure', 'on-request', 'granular', 'never'].includes(candidate) ? candidate : '';
 }
 
-function sendMediaPath(res, filePath, cwd = '') {
-  const target = resolveRequestedMediaPath(filePath, cwd);
-  const policy = fileServingMode === 'system'
-    ? { sandboxPolicy: 'dangerFullAccess' }
-    : { cwd, sandboxPolicy: 'workspaceWrite' };
-  const media = mediaFromLocalFilePath(target, policy);
-  if (!media) {
-    res.writeHead(target ? 403 : 404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end(target ? 'File is outside the allowed media scope or unavailable.' : 'Not found');
-    return;
-  }
-  const id = String(media.src ?? '').split('/').pop();
-  sendMedia(res, id);
-}
 function sendMedia(res, id) {
   const media = mediaById.get(id);
   if (!media) {
@@ -2286,11 +2617,6 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === '/api/media/path' && req.method === 'GET') {
-      sendMediaPath(res, url.searchParams.get('path'), url.searchParams.get('cwd'));
-      return;
-    }
-
     const mediaMatch = url.pathname.match(/^\/api\/media\/([a-f0-9]+)$/);
     if (mediaMatch && req.method === 'GET') {
       sendMedia(res, mediaMatch[1]);
@@ -2298,11 +2624,14 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/events') {
+      res.socket?.setKeepAlive(true, eventHeartbeatMs);
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store, no-transform',
         connection: 'keep-alive',
+        'x-accel-buffering': 'no',
       });
+      res.flushHeaders?.();
       const remove = codex.addEventClient(res);
       req.on('close', remove);
       return;
@@ -2349,6 +2678,7 @@ const server = createServer(async (req, res) => {
       const payload = await readTurnPayload(req);
       const cwd = String(payload.cwd ?? '').trim();
       if (cwd) {
+        await requireUsableWorktreePath(cwd, await appConfig(), 'Session worktree');
         const existing = await existingThreadForCwd(cwd);
         if (existing) throw new Error(`This worktree already has a session: ${existing.name || existing.id}. Open that session or create a new worktree.`);
       }
@@ -2402,7 +2732,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move)$/);
+    const queueActionMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/(remove|steer|move|edit)$/);
     if (queueActionMatch && req.method === 'POST') {
       requireWriteAccess();
       const threadId = decodeURIComponent(queueActionMatch[1]);
@@ -2415,6 +2745,11 @@ const server = createServer(async (req, res) => {
       if (action === 'move') {
         const body = await readJson(req);
         sendJson(res, 200, { queuedMessages: codex.moveQueuedMessage(threadId, queuedId, body.direction) });
+        return;
+      }
+      if (action === 'edit') {
+        const body = await readJson(req);
+        sendJson(res, 200, { queuedMessage: codex.editQueuedMessage(threadId, queuedId, body.prompt) });
         return;
       }
       sendJson(res, 200, await codex.steerQueuedMessage(threadId, queuedId));
@@ -2451,6 +2786,9 @@ const server = createServer(async (req, res) => {
     sendError(res, error.statusCode || 500, error);
   }
 });
+
+server.keepAliveTimeout = httpKeepAliveTimeoutMs;
+server.headersTimeout = httpHeadersTimeoutMs;
 
 server.listen(port, host, () => {
   console.log(`codex-control listening on http://${host}:${port}`);

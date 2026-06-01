@@ -15,10 +15,36 @@ function defaultCanServeLocalFilePath(filePath) {
 }
 
 function policyFromCwd(cwd = '', policy = {}) {
+  const resolveRoots = uniqueValues([
+    cwd,
+    policy.cwd,
+    ...(Array.isArray(policy.resolveRoots) ? policy.resolveRoots : []),
+    ...(Array.isArray(policy.resolveCwds) ? policy.resolveCwds : []),
+  ].filter(Boolean));
+  const allowedRoots = uniqueValues([
+    policy.cwd,
+    ...(Array.isArray(policy.allowedRoots) ? policy.allowedRoots : []),
+    ...resolveRoots,
+  ].filter(Boolean));
   return {
     ...policy,
     cwd: policy.cwd || cwd || '',
+    resolveRoots,
+    resolveCwds: resolveRoots,
+    allowedRoots,
   };
+}
+
+function uniqueValues(values = []) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function resolveRootsForPolicy(policy = {}) {
+  return uniqueValues([
+    ...(Array.isArray(policy.resolveRoots) ? policy.resolveRoots : []),
+    ...(Array.isArray(policy.resolveCwds) ? policy.resolveCwds : []),
+    policy.cwd,
+  ]);
 }
 
 export function createTranscriptMediaHelpers({
@@ -73,12 +99,12 @@ export function createTranscriptMediaHelpers({
   function rewriteMarkdownLocalFileLinks(text, policy = {}) {
     return String(text ?? '').replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const media = renderableMediaFromLocalFilePath(resolveMentionedFilePath(target, policy.cwd) || target, policy);
+      const media = renderableMediaFromLocalFilePath(resolveMentionedFilePathForPolicy(target, policy) || target, policy);
       const kind = String(media?.contentType ?? '').startsWith('video/') ? 'video' : 'image';
       return media ? `![${alt}](${media.src}?kind=${kind})` : match;
     }).replace(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawTarget) => {
       const target = String(rawTarget ?? '').trim().replace(/^["']|["']$/g, '');
-      const resolved = resolveMentionedFilePath(target, policy.cwd) || target;
+      const resolved = resolveMentionedFilePathForPolicy(target, policy) || target;
       const media = mediaFromLocalFilePath(resolved, policy);
       return media ? `[${label}](${media.src})` : match;
     });
@@ -94,7 +120,7 @@ export function createTranscriptMediaHelpers({
 
   function rewriteInlineCodeLocalFileLinks(text, policy = {}) {
     return String(text ?? '').replace(/`([^`\n]+)`/g, (match, rawPath) => {
-      const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
+      const resolved = resolveMentionedFilePathForPolicy(rawPath, policy);
       const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
       return media ? `[${rawPath}](${media.src})` : match;
     });
@@ -103,10 +129,18 @@ export function createTranscriptMediaHelpers({
   function rewriteBareLocalFilePaths(text, policy = {}) {
     const source = String(text ?? '');
     return source.replace(/(^|[\s(<])((?:[a-zA-Z]:[\\/]|\\\\)[^\s`<>()\[\]{}]+|(?:(?:\.{1,3}|\u2026)[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)(?=$|[\s)\]>.,;:])/g, (match, prefix, rawPath) => {
-      const resolved = resolveMentionedFilePath(rawPath, policy.cwd);
+      const resolved = resolveMentionedFilePathForPolicy(rawPath, policy);
       const media = resolved ? mediaFromLocalFilePath(resolved, policy) : null;
       return media ? `${prefix}[${rawPath}](${media.src})` : match;
     });
+  }
+
+  function resolveMentionedFilePathForPolicy(rawPath, policy = {}) {
+    for (const root of resolveRootsForPolicy(policy)) {
+      const resolved = resolveMentionedFilePath(rawPath, root);
+      if (resolved) return resolved;
+    }
+    return resolveMentionedFilePath(rawPath, policy.cwd);
   }
 
   return {

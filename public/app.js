@@ -95,6 +95,8 @@ const EVENT_DETAIL_REFRESH_DELAY_MS = 1000;
 const BACKGROUND_LIST_REFRESH_DELAY_MS = 10000;
 const HIDDEN_EVENT_REFRESH_DELAY_MS = 15000;
 const DETAIL_FULL_REFRESH_STALE_MS = 5000;
+const RETRYABLE_GET_STATUSES = new Set([502, 503, 504]);
+const GET_RETRY_DELAY_MS = 750;
 const PERMISSION_PRESETS = [
   { id: 'review', label: 'review only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', networkAccess: false },
   { id: 'normal', label: 'normal coding', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', networkAccess: false },
@@ -886,16 +888,31 @@ function paramsFromForm() {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(path, { cache: 'no-store', ...options });
-  const text = await res.text();
-  let json = {};
-  try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    json = { error: text || res.statusText };
+  const method = String(options.method || 'GET').toUpperCase();
+  const attempts = method === 'GET' ? 2 : 1;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const res = await fetch(path, { cache: 'no-store', ...options });
+      const text = await res.text();
+      let json = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = { error: text || res.statusText };
+      }
+      if (res.ok) return json;
+      const error = new Error(json.error || res.statusText);
+      error.status = res.status;
+      if (!RETRYABLE_GET_STATUSES.has(res.status) || attempt >= attempts - 1) throw error;
+      lastError = error;
+    } catch (error) {
+      if (method !== 'GET' || attempt >= attempts - 1 || (error.status && !RETRYABLE_GET_STATUSES.has(error.status))) throw error;
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, GET_RETRY_DELAY_MS));
   }
-  if (!res.ok) throw new Error(json.error || res.statusText);
-  return json;
+  throw lastError || new Error('Request failed');
 }
 
 async function jsonApi(path, body) {
@@ -983,6 +1000,7 @@ function renderRuntimeDiagnostics(data) {
       <dl class="runtime-basics">
         <dt>Config loaded</dt><dd>${escapeHtml(data.config.exists ? 'yes' : 'no')}</dd>
         <dt>Workspace roots</dt><dd>${escapeHtml((data.config.workspaceRoots || []).join('\n') || '-')}</dd>
+        <dt>Required root</dt><dd>${escapeHtml(data.config.requiredWorktreeRoot || 'auto')}</dd>
         <dt>Workflows</dt><dd>${escapeHtml(Object.entries(data.config.worktreeWorkflows || {}).map(([id, item]) => `${id}: ${item.label || id}`).join('\n') || '-')}</dd>
         <dt>Warnings</dt><dd>${escapeHtml((data.config.warnings || []).join('\n') || '-')}</dd>
       </dl>
@@ -1057,6 +1075,10 @@ async function loadSessions({ quiet = false } = {}) {
     }
     else for (const el of listEl.querySelectorAll('.session')) el.classList.toggle('active', el.dataset.id === activeSession.id);
   } catch (error) {
+    if (quiet) {
+      statusEl.textContent = `Session refresh failed: ${error.message}`;
+      return;
+    }
     listEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
 }
@@ -1127,6 +1149,8 @@ async function startSessionFromSelectedWorktree(event) {
     if (!cwd) return window.alert('Choose a worktree first, or choose chat-only.');
     const selected = newSessionWorktrees.find((item) => item.path === cwd);
     if (selected?.session) return window.alert('This worktree already has a session. Open that session or create a new worktree.');
+    const blocked = worktreeBlockedReason(selected);
+    if (blocked) return window.alert(blocked);
     formData.set('cwd', cwd);
   }
 
@@ -1323,11 +1347,14 @@ async function loadNewSessionWorktrees(preferredPath = '') {
     newWorktreeSelect.innerHTML = worktrees.map((item) => {
       const branch = item.branch || 'detached';
       const attached = Boolean(item.session);
+      const blocked = worktreeBlockedReason(item);
       const sessionName = item.session?.name || item.session?.id || 'session';
-      const suffix = attached ? ` - has session: ${sessionName}` : '';
-      return `<option value="${escapeHtml(item.path)}"${attached ? ' disabled' : ''}>${escapeHtml(branch)} - ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
+      const suffix = attached ? ` - has session: ${sessionName}` : (blocked ? ` - blocked: ${worktreeBlockedLabel(item)}` : '');
+      return `<option value="${escapeHtml(item.path)}"${attached || blocked ? ' disabled' : ''}>${escapeHtml(branch)} - ${escapeHtml(compactPath(item.path))}${escapeHtml(suffix)}</option>`;
     }).join('') + chatOption;
-    const available = worktrees.filter((item) => !item.session);
+    const available = worktrees.filter(canStartWorktree);
+    const usableSources = worktrees.filter(canUseWorktreeAsSource);
+    const blockedCount = worktrees.filter((item) => worktreeBlockedReason(item)).length;
     if (preferredPath && [...newWorktreeSelect.options].some((option) => option.value === preferredPath && !option.disabled)) newWorktreeSelect.value = preferredPath;
     else {
       const suggested = suggestedWorktreeForSessionName();
@@ -1335,21 +1362,43 @@ async function loadNewSessionWorktrees(preferredPath = '') {
       else if (available[0]) newWorktreeSelect.value = available[0].path;
       else newWorktreeSelect.value = '__chat__';
     }
-    createWorktreeButton.disabled = isReadOnly();
+    createWorktreeButton.disabled = isReadOnly() || !usableSources.length;
     createWorktreeButton.hidden = isReadOnly();
-    createWorktreeButton.title = isReadOnly() ? 'Read-only mode is enabled.' : 'Create a new worktree from this repo.';
+    createWorktreeButton.title = isReadOnly()
+      ? 'Read-only mode is enabled.'
+      : usableSources.length ? 'Create a new worktree from this repo.' : 'No usable source worktree is available.';
     updateNewSessionStartState();
+    const blockedSuffix = blockedCount ? ` ${blockedCount} blocked by worktree policy.` : '';
     newWorktreeHint.textContent = available.length
-      ? `${available.length} of ${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} can start a new session. Attached worktrees are disabled.`
-      : `All ${worktrees.length} known worktree${worktrees.length === 1 ? '' : 's'} already have sessions. Create a new worktree to start another session.`;
+      ? `${available.length} of ${worktrees.length} worktree${worktrees.length === 1 ? '' : 's'} can start a new session. Attached and blocked worktrees are disabled.${blockedSuffix}`
+      : usableSources.length
+        ? `All usable worktrees already have sessions. Create a new worktree to start another session.${blockedSuffix}`
+        : `No usable source worktree is available for this repo.${blockedSuffix}`;
   } catch (error) {
     newWorktreeSelect.innerHTML = '<option value="">Worktrees unavailable</option>';
     newWorktreeHint.textContent = error.message;
   }
 }
 
+function worktreeBlockedReason(item) {
+  return String(item?.blockedReason || item?.validation?.blockedReason || '').trim();
+}
+
+function worktreeBlockedLabel(item) {
+  return String(item?.blockedLabel || item?.validation?.blockedLabel || 'worktree policy').trim();
+}
+
+function canStartWorktree(item) {
+  return Boolean(item && !item.session && !worktreeBlockedReason(item));
+}
+
+function canUseWorktreeAsSource(item) {
+  return Boolean(item && !item.bare && !worktreeBlockedReason(item));
+}
+
 function selectedWorktreeSourcePath() {
-  return newWorktreeSelect.value === '__chat__' ? (newSessionWorktrees.find((item) => item.path)?.path || '') : (newWorktreeSelect.value || newSessionWorktrees.find((item) => item.path)?.path || '');
+  const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value && canUseWorktreeAsSource(item));
+  return selected?.path || newSessionWorktrees.find(canUseWorktreeAsSource)?.path || '';
 }
 
 function updateNewSessionStartState() {
@@ -1362,9 +1411,10 @@ function updateNewSessionStartState() {
     return;
   }
   const selected = newSessionWorktrees.find((item) => item.path === newWorktreeSelect.value);
-  const canStart = Boolean(selected && !selected.session);
+  const blocked = worktreeBlockedReason(selected);
+  const canStart = canStartWorktree(selected);
   startButton.disabled = !canStart;
-  startButton.title = canStart ? '' : 'Choose a worktree without an existing session, or create a new worktree.';
+  startButton.title = canStart ? '' : (blocked || 'Choose a worktree without an existing session, or create a new worktree.');
 }
 
 function slugFromSessionName(value) {
@@ -1374,7 +1424,7 @@ function slugFromSessionName(value) {
 function suggestedWorktreeForSessionName() {
   const slug = slugFromSessionName(newSessionNameInput.value);
   if (!slug) return null;
-  return newSessionWorktrees.find((item) => !item.session && (
+  return newSessionWorktrees.find((item) => canStartWorktree(item) && (
     String(item.branch ?? '').toLowerCase().includes(slug) ||
     compactPath(item.path).toLowerCase().includes(slug)
   )) ?? null;
@@ -1452,13 +1502,13 @@ async function loadDetail(id, { quiet = false } = {}) {
   if (!quiet) clearTimeout(detailRefreshTimer);
   const requestSeq = ++detailRequestSeq;
   const previousId = activeSession.id;
-  const previousScroller = detailEl.querySelector('.detail-shell .detail');
-  const previousScrollTop = previousScroller?.scrollTop ?? 0;
-  const scrollAnchor = quiet && id === previousId ? detailScroll.captureScrollAnchor(previousScroller) : null;
-  const scrollRestoreSeq = detailScroll.stabilitySeq;
-  const openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
-  const sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
-  const shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && detailScroll.isNearBottom(previousScroller);
+  let previousScroller = detailEl.querySelector('.detail-shell .detail');
+  let previousScrollTop = previousScroller?.scrollTop ?? 0;
+  let scrollAnchor = quiet && id === previousId ? detailScroll.captureScrollAnchor(previousScroller) : null;
+  let scrollRestoreSeq = detailScroll.stabilitySeq;
+  let openTurnDetails = quiet && id === previousId ? captureOpenTurnDetails() : new Set();
+  let sessionDetailsOpen = quiet && id === previousId && Boolean(detailEl.querySelector('.session-meta')?.open);
+  let shouldContinueFollowing = quiet && id === previousId && !openTurnDetails.size && detailScroll.isNearBottom(previousScroller);
   const previousForm = detailEl.querySelector('#promptForm');
   const preservePromptForm = quiet && id === previousId && previousForm;
   const draftPrompt = quiet && id === previousId ? previousForm?.elements?.prompt?.value ?? '' : '';
@@ -1479,6 +1529,15 @@ async function loadDetail(id, { quiet = false } = {}) {
   try {
     const data = await api(`/api/threads/${encodeURIComponent(id)}`);
     if (requestSeq !== detailRequestSeq || id !== activeSession.id) return;
+    if (quiet && id === previousId) {
+      previousScroller = detailEl.querySelector('.detail-shell .detail');
+      previousScrollTop = previousScroller?.scrollTop ?? previousScrollTop;
+      scrollAnchor = detailScroll.captureScrollAnchor(previousScroller);
+      scrollRestoreSeq = detailScroll.stabilitySeq;
+      openTurnDetails = captureOpenTurnDetails();
+      sessionDetailsOpen = Boolean(detailEl.querySelector('.session-meta')?.open);
+      shouldContinueFollowing = !openTurnDetails.size && detailScroll.isNearBottom(previousScroller);
+    }
     activeDetailState = detailStateFromDetailData(data);
     lastDetailLoadAt = Date.now();
     detailEl.className = 'detail-host';
@@ -1519,6 +1578,11 @@ async function loadDetail(id, { quiet = false } = {}) {
     });
   } catch (error) {
     if (requestSeq !== detailRequestSeq || id !== activeSession.id) return;
+    if (quiet && currentDetailThreadId() === id) {
+      statusEl.textContent = `Detail refresh failed: ${error.message}`;
+      scheduleDetailRefresh(id, 5000);
+      return;
+    }
     detailEl.className = 'error';
     detailEl.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
@@ -1743,10 +1807,11 @@ function renderQueuedMessages(messages = []) {
   const controls = !isReadOnly();
   return `<div class="queued-messages" aria-live="polite">
     <div class="queued-title">Queued messages</div>
-    ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeHtml(message.turnId || '')}">
+    ${messages.map((message, index) => `<div class="queued-message" data-queued-id="${escapeAttribute(message.turnId || '')}" data-queue-text="${escapeAttribute(message.text || '')}">
       <div class="queued-head">
         <span></span>
         ${controls ? `<div class="queued-actions">
+          <button type="button" data-queue-action="edit">Edit</button>
           <button type="button" data-queue-action="up" ${index === 0 ? 'disabled' : ''}>Up</button>
           <button type="button" data-queue-action="down" ${index === messages.length - 1 ? 'disabled' : ''}>Down</button>
           <button type="button" data-queue-action="steer">Steer now</button>
@@ -1780,11 +1845,17 @@ async function updateQueuedMessage(threadId, queuedId, action, button) {
   if (!threadId || !queuedId || !action) return;
   const targetId = verifiedVisibleThreadId(threadId);
   if (!targetId) return;
+  const row = button?.closest('.queued-message');
+  const currentPrompt = row?.dataset.queueText || '';
+  const editedPrompt = action === 'edit' ? window.prompt('Queued prompt:', currentPrompt) : null;
+  if (action === 'edit' && editedPrompt === null) return;
   button.disabled = true;
   const label = button.textContent;
   button.textContent = '...';
   try {
-    const body = action === 'up' || action === 'down' ? { direction: action } : {};
+    const body = action === 'up' || action === 'down'
+      ? { direction: action }
+      : action === 'edit' ? { prompt: editedPrompt } : {};
     await jsonApi(`/api/threads/${encodeURIComponent(targetId)}/queue/${encodeURIComponent(queuedId)}/${action === 'up' || action === 'down' ? 'move' : action}`, body);
     scheduleDetailRefresh(targetId, 100);
     scheduleLoadSessions();
@@ -2056,7 +2127,8 @@ function clearPromptComposerContent(form) {
 function renderTurn(turn, index, thread) {
   const threadBusy = isBusyThread(thread);
   const turnStatus = String(turn.status ?? '').toLowerCase();
-  const activeLatestTurn = index === 0 && threadBusy;
+  const latestTurn = index === 0;
+  const activeLatestTurn = latestTurn && threadBusy;
   const statusValue = activeLatestTurn
     ? statusLabel(thread)
     : (threadBusy && turnStatus === 'interrupted' ? '' : turn.status);
@@ -2074,7 +2146,7 @@ function renderTurn(turn, index, thread) {
   const visibleSteeredMessages = (turn.steeredMessages ?? []).map((message) => renderSteeredMessage(message, renderOptions)).join('');
   const hasInnerItems = (summary.hiddenItems?.length ?? 0) > 0 || Boolean(turnBreak);
   const hasResponse = Boolean(summary.responseItem || String(summary.response ?? '').trim());
-  const intermediateOpen = activeLatestTurn ? ' open' : '';
+  const intermediateOpen = latestTurn ? ' open' : '';
   return `<section class="turn ${escapeHtml(status)}" data-turn-id="${escapeHtml(turn.id || index)}">
     <div class="meta"><span class="badge">Turn ${index + 1}</span>${model ? `<span class="badge model">${escapeHtml(model)}</span>` : ''}${effort ? `<span class="badge effort">${escapeHtml(effort)}</span>` : ''}${statusValue ? `<span class="badge turn-status ${escapeHtml(status)}">${escapeHtml(statusValue)}</span>` : ''}</div>
     <div class="turn-compact">
@@ -2248,10 +2320,11 @@ function bindImageLightbox() {
 }
 
 function renderItem(item, options = {}) {
+  const itemOptions = { ...options, cwd: item.cwd || options.cwd || '' };
   const body = item.command
     ? `$ ${item.command}\n\n${item.output || ''}`
     : (item.text || '');
-  const customItem = renderSingleItem(item, options);
+  const customItem = renderSingleItem(item, itemOptions);
   const customBlocks = renderItemBlocks(item);
   const label = itemLabel(item);
   const noisy = looksNoisy(item, body);
@@ -2272,13 +2345,13 @@ function renderItem(item, options = {}) {
       label,
       body,
       preview,
-      options,
+      options: itemOptions,
     });
   }
 
   return `<article class="item ${escapeHtml(item.type)}">
     <div class="item-type">${escapeHtml(label)}</div>
-    ${renderContentParts(item, body, options)}
+    ${renderContentParts(item, body, itemOptions)}
   </article>`;
 }
 

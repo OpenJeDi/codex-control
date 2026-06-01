@@ -81,6 +81,10 @@ export function createThreadEventRouter({
 
   function connect() {
     const events = createEventSource('/api/events');
+    events.addEventListener('ready', () => {
+      scheduleBackgroundLoadSessions();
+      if (activeSession.id) scheduleEventDetailRefresh(activeSession.id);
+    });
     events.addEventListener('codex-notification', (event) => {
       const payload = JSON.parse(event.data || '{}');
       const params = payload.params ?? {};

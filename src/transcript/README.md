@@ -18,7 +18,7 @@ The browser can render normalized transcript items and blocks, but it cannot res
 The normalizer:
 
 - preserves prompt, response, reasoning, command, and attachment behavior;
-- rewrites agent local file references into served `/api/media/:id` links;
+- rewrites assistant, reasoning, and command-output local file references into served `/api/media/:id` links;
 - normalizes image content parts into browser-renderable media parts;
 - delegates specialized raw shapes, such as image generation, to parser modules;
 - returns `item.renderBlocks` for structured blocks that the browser should render with `public/transcript/parsers/`.
@@ -68,7 +68,7 @@ Normalizer modules receive a context object with:
 - `mediaFromBase64Data(base64Data, fallbackContentType)`: stores raw base64 image payloads after validating image bytes.
 - `mediaFromLocalFilePath(filePath)`: stores local file media and returns a served media object.
 - `resolveMentionedFilePath(rawPath, cwd)`: resolves absolute or thread-relative file mentions.
-- `rewriteLocalFileReferences(text, cwd)`: rewrites local media mentions in Markdown-ish text.
+- `rewriteLocalFileReferences(text, cwd, mediaPolicy)`: rewrites local media mentions in Markdown-ish text using server-side path resolution and serving policy.
 - `extractModelFromPayload(value)`: reads model metadata for turns.
 - `extractEffortFromPayload(value)`: reads reasoning effort metadata for turns.
 

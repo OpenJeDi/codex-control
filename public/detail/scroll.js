@@ -9,6 +9,7 @@ export function createDetailScrollController({ detailElement, getRequestSeq }) {
 
   const currentRequestSeq = () => Number(getRequestSeq?.() ?? 0);
   const currentScroller = () => detailElement?.querySelector('.detail-shell .detail') ?? null;
+  const isCurrentRestore = (requestSeq, stabilitySeq) => requestSeq === currentRequestSeq() && stabilitySeq === scrollStabilitySeq;
 
   function markProgrammaticScroll(duration = 450) {
     programmaticScrollUntil = Math.max(programmaticScrollUntil, Date.now() + duration);
@@ -35,7 +36,7 @@ export function createDetailScrollController({ detailElement, getRequestSeq }) {
   } = {}) {
     if (!scroller) return;
     const apply = (behavior = 'auto') => {
-      if (requestSeq !== currentRequestSeq() || stabilitySeq !== scrollStabilitySeq) return;
+      if (!isCurrentRestore(requestSeq, stabilitySeq)) return;
       markProgrammaticScroll();
       scroller.scrollTo({ top: scroller.scrollHeight + scroller.clientHeight, behavior });
       updateJumpBottomButton(scroller);
@@ -102,6 +103,7 @@ export function createDetailScrollController({ detailElement, getRequestSeq }) {
     stabilitySeq = scrollStabilitySeq,
   } = {}) {
     if (!scroller) return;
+    if (!isCurrentRestore(requestSeq, stabilitySeq)) return;
     if (followBottom) scrollElementToBottom(scroller, { requestSeq, stabilitySeq });
     else restoreScrollAnchor(scroller, anchor, fallbackScrollTop);
     updateJumpBottomButton(scroller);
@@ -110,8 +112,7 @@ export function createDetailScrollController({ detailElement, getRequestSeq }) {
   function stabilizeAfterMediaLayout(scroller, requestSeq, anchor, fallbackScrollTop, stabilitySeq) {
     if (!scroller || !anchor?.turnId) return;
     const restore = () => {
-      if (requestSeq !== currentRequestSeq()) return;
-      if (stabilitySeq !== scrollStabilitySeq) return;
+      if (!isCurrentRestore(requestSeq, stabilitySeq)) return;
       restoreState(scroller, { anchor, fallbackScrollTop, requestSeq, stabilitySeq });
     };
     requestAnimationFrame(() => requestAnimationFrame(restore));

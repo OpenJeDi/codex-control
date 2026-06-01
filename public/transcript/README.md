@@ -58,13 +58,14 @@ Rules:
 
 - `escapeHtml(value)`: escape text content.
 - `escapeAttribute(value)`: escape attribute values.
-- `mediaKindFromSrc(src)`: classify image, video, or file URLs.
+- `isBrowserSafeTranscriptHref(src)`: allow only browser-safe transcript links such as `/api/media/:id`, HTTP(S), mail, data image/video, and blob URLs.
+- `mediaKindFromSrc(src)`: classify browser-safe image, video, or file URLs.
 - `renderSessionImageFigure(src, caption, alt)`: render standard clickable transcript image markup.
 - `renderCompactDetailsItem({ type, label, body, preview, className })`: render the standard compact `<details>` item shell.
 - `renderMarkdownMedia(src, label, embedded)`: render Markdown-linked media or anchors.
-- `renderInlineMarkdown(text, options)`: render inline Markdown subset. `options.cwd` lets inline code spans link local absolute paths, normal cwd-relative paths, and `...\` cwd-relative shorthand through the server media policy.
+- `renderInlineMarkdown(text, options)`: render inline Markdown subset. Local filesystem paths are rendered as text unless the server already normalized them to `/api/media/:id` links.
 - `renderMarkdownBlocks(text, options)`: render paragraph/list/heading Markdown subset.
-- `renderCodeBlockContent(code, options)`: render code block content with local path links.
+- `renderCodeBlockContent(code, options)`: render escaped code block content, linking only browser-safe URLs that the server already produced, such as `/api/media/:id`.
 - `renderMarkdownText(text, options)`: render full Markdown text, including copy-code buttons.
 - `shouldRenderMarkdown(item)`: decide whether text parts should use Markdown.
 - `renderContentParts(item, fallbackBody, options)`: render normalized `item.parts`.
@@ -155,6 +156,8 @@ Keep this boundary intact:
 - Server: detect raw Codex protocol shapes in `src/transcript/`, resolve local files, create `/api/media/:id` URLs, truncate raw JSON, and normalize data into stable item/block fields.
 - Client parsers: choose markup for already-normalized item/block shapes.
 - `public/app.js`: orchestrate transcript rendering, detail refresh, lightbox state, copy-button binding, and other page-level behavior.
+
+The browser must not build local-file media URLs from raw paths. If a local file should be clickable or embeddable, add that resolution to the server normalizer so the client only receives a scoped `/api/media/:id` URL.
 
 If a parser needs a helper that should be shared, add rendering-level helpers to `rendering.js` and include them in `createTranscriptRenderContext()`. Put lower-level reusable helpers, such as escaping or media classification, under `utils/`.
 

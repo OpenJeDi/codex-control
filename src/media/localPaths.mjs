@@ -16,22 +16,6 @@ export function normalizeLocalFilePath(filePath) {
   return '';
 }
 
-export function resolveRequestedMediaPath(filePath, cwd = '') {
-  const raw = stripPathLineSuffix(String(filePath ?? '').trim().replace(/^<|>$/g, ''));
-  const root = normalizeLocalFilePath(cwd);
-  if (root && /^(?:\.\.\.|\u2026|\.)(?:[\\/])/.test(raw)) {
-    const relative = raw.replace(/^(?:\.\.\.|\u2026|\.)(?:[\\/])/, '');
-    return path.win32.normalize(path.win32.join(root, relative));
-  }
-  if (root
-    && !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(raw)
-    && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)
-    && !/^[\\/]/.test(raw)) {
-    return path.win32.normalize(path.win32.join(root, raw));
-  }
-  return normalizeLocalFilePath(raw);
-}
-
 export function isWindowsPath(filePath) {
   return /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(String(filePath ?? ''));
 }

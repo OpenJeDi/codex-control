@@ -77,10 +77,12 @@ Codex Control can create a branch worktree from a selected source worktree.
 
 No JSON config is required for the default behavior. The target root is inferred from the source path:
 
+- If the source is a linked worktree whose common Git directory is a sibling bare repo named `<repo>.git`, new worktrees are placed under the sibling `<repo>-worktrees` directory.
+- Linked worktrees outside their required root are shown as blocked and cannot start new sessions or create more worktrees.
 - If the source is already under a `worktrees` or `*-worktrees` directory, new worktrees are placed beside it.
 - Otherwise, the default target root is a sibling `*-worktrees` directory.
 
-Use the worktree root override in the dialog when your local layout is different for one creation. Use `codex-control.config.json` only when you want Codex Control to always create worktrees in a specific local layout.
+Use the worktree root override in the dialog when your local layout is different for one creation. The override must stay under the required worktree root when one is inferred or configured. Use `codex-control.config.json` only when you want Codex Control to always create worktrees in a specific local layout.
 
 Paths are always paths on the machine running Codex Control, even if you open the UI from another computer.
 
@@ -101,6 +103,9 @@ Configuration can be set in the process environment or in a local `.env` file. P
 | `CODEX_CONTROL_FILE_SERVING` | `session` | Controls local file links. Use `session` for session-policy access or `system` to serve any local file path. |
 | `CODEX_CONTROL_DEV_RESTART` | unset | Set to `1` to enable the development-only `/api/codex/restart` endpoint. |
 | `CODEX_CONTROL_RESTART_TASK` | unset | Optional Windows Scheduled Task name used by the stop/restart helpers. |
+| `CODEX_CONTROL_HTTP_KEEP_ALIVE_TIMEOUT_MS` | `75000` | Upstream HTTP keep-alive timeout. Raise when a reverse proxy keeps idle upstream sockets longer than this. |
+| `CODEX_CONTROL_HTTP_HEADERS_TIMEOUT_MS` | keep-alive + `5000` | HTTP headers timeout. Must stay higher than the keep-alive timeout. |
+| `CODEX_CONTROL_EVENT_HEARTBEAT_MS` | `25000` | SSE heartbeat interval used to keep `/api/events` alive through proxies and sleeping clients. |
 
 See `.env.example` for a local environment template.
 
@@ -152,11 +157,12 @@ Example:
   "workspaceRoots": [
     "C:/Users/you/work"
   ],
+  "requiredWorktreeRoot": "{canonicalWorktreeRoot}",
   "defaultWorktreeWorkflow": "bare-container",
   "worktreeWorkflows": {
     "bare-container": {
       "label": "Bare repo container with worktrees",
-      "branchWorktree": "{workspaceRoot}/{repoName}/worktrees/{branchName}"
+      "branchWorktree": "{requiredWorktreeRoot}/{branchName}"
     },
     "auto-sibling": {
       "label": "Auto sibling worktrees",
@@ -174,6 +180,10 @@ Available template variables:
 - `{sourceParent}`: parent directory of the selected source worktree.
 - `{sourceName}`: folder name of the selected source worktree.
 - `{autoWorktreeRoot}`: default sibling worktree root inferred from the selected source path.
+- `{canonicalWorktreeRoot}`: inferred sibling worktree root for linked worktrees backed by a bare `<repo>.git` directory.
+- `{requiredWorktreeRoot}`: configured or inferred worktree root that targets and source worktrees must stay under.
+- `{gitCommonDir}`: Git common directory for the selected source worktree.
+- `{gitDir}`: Git directory for the selected source worktree.
 - `{branchName}`: branch name exactly as entered.
 - `{branchFolder}`: branch name sanitized for a single folder segment.
 

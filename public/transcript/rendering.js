@@ -1,7 +1,7 @@
 import { escapeAttribute, escapeHtml } from './utils/html.js';
-import { mediaKindFromSrc } from './utils/media.js';
+import { isBrowserSafeTranscriptHref, mediaKindFromSrc } from './utils/media.js';
 
-export { escapeAttribute, escapeHtml, mediaKindFromSrc };
+export { escapeAttribute, escapeHtml, isBrowserSafeTranscriptHref, mediaKindFromSrc };
 
 export function renderSessionImageFigure(src, caption = '', alt = 'Session image') {
   return `<figure class="session-image"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt || caption || 'Session image')}" loading="lazy"><figcaption>${escapeHtml(caption || 'image')}</figcaption></figure>`;
@@ -23,7 +23,8 @@ export function renderCompactDetailsItem({ type = 'item', label = 'Item', body =
 
 export function renderMarkdownMedia(src, label = '', embedded = false, options = {}) {
   const cleanSrc = String(src ?? '').trim().replace(/^["']|["']$/g, '');
-  const href = localMediaPathHref(cleanSrc, options) || cleanSrc;
+  const href = cleanSrc;
+  if (!isBrowserSafeTranscriptHref(href)) return escapeHtml(label || cleanSrc);
   const caption = escapeHtml(label || 'media');
   const kind = mediaKindFromSrc(href);
   if (embedded && kind === 'image') {
@@ -35,35 +36,12 @@ export function renderMarkdownMedia(src, label = '', embedded = false, options =
   return `<a href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(label || cleanSrc)}</a>`;
 }
 
-function stripPathLineSuffix(value) {
-  const text = String(value ?? '').trim();
-  const withoutFragment = text.replace(/#L\d+(?:-L?\d+)?$/i, '');
-  const match = withoutFragment.match(/^(.+[\\/][^\\/]+):\d+(?::\d+)?$/);
-  return match ? match[1] : withoutFragment;
-}
-
-function localMediaPathHref(filePath, options = {}) {
-  const rawPath = stripPathLineSuffix(String(filePath ?? '').trim().replace(/^["']|["']$/g, ''));
-  if (!rawPath) return '';
-  const isAbsolute = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(rawPath);
-  const isCwdRelative = /^(?:\.\.\.|\u2026|\.)(?:[\\/])/.test(rawPath);
-  const isPlainRelative = !isAbsolute
-    && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath)
-    && !/^[\\/]/.test(rawPath)
-    && /[\\/]/.test(rawPath);
-  if (!isAbsolute && !isCwdRelative && !isPlainRelative) return '';
-
-  const params = new URLSearchParams({ path: rawPath });
-  const cwd = String(options.cwd ?? '').trim();
-  if (cwd) params.set('cwd', cwd);
-  return `/api/media/path?${params.toString()}`;
-}
-
-function renderCodeSpan(code, options = {}) {
+function renderCodeSpan(code) {
   const value = String(code ?? '');
-  const href = localMediaPathHref(value, options);
-  if (!href) return `<code>${escapeHtml(value)}</code>`;
-  return `<code><a class="code-file-link" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(value)}</a></code>`;
+  if (isBrowserSafeTranscriptHref(value)) {
+    return `<code><a class="code-file-link" href="${escapeAttribute(value)}" target="_blank" rel="noreferrer">${escapeHtml(value)}</a></code>`;
+  }
+  return `<code>${escapeHtml(value)}</code>`;
 }
 
 export function renderInlineMarkdown(text, options = {}) {
@@ -72,7 +50,7 @@ export function renderInlineMarkdown(text, options = {}) {
   const links = [];
   const pushCodeSpan = (code) => {
     const token = `@@CODE${codeSpans.length}@@`;
-    codeSpans.push(renderCodeSpan(code, options));
+    codeSpans.push(renderCodeSpan(code));
     return token;
   };
   const pushLink = (href, label = href) => {
@@ -209,20 +187,25 @@ export function renderMarkdownBlocks(text, options = {}) {
 
 export function renderCodeBlockContent(code, options = {}) {
   const source = String(code ?? '');
-  const pathPattern = /((?:[a-zA-Z]:[\\/]|\\\\|\.{1,2}[\\/]|[A-Za-z0-9_.-]+[\\/])[^\s`<>()\[\]{}]+)/g;
+  const safeLinkPattern = /\[([^\]\n]+)\]\(([^)\s]+)\)|((?:https?:\/\/|\/api\/media\/)[^\s`<>()\[\]{}]+)/gi;
   let html = '';
   let lastIndex = 0;
-  for (const match of source.matchAll(pathPattern)) {
-    const rawMatch = match[1];
+  for (const match of source.matchAll(safeLinkPattern)) {
     const start = match.index ?? 0;
-    const rawPath = rawMatch.replace(/[.,;:]+$/g, '');
-    const suffix = rawMatch.slice(rawPath.length);
     html += escapeHtml(source.slice(lastIndex, start));
-    const href = localMediaPathHref(rawPath, options);
-    html += href
-      ? `<a class="code-file-link" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${escapeHtml(rawPath)}</a>${escapeHtml(suffix)}`
-      : `${escapeHtml(rawPath)}${escapeHtml(suffix)}`;
-    lastIndex = start + rawMatch.length;
+    if (match[1] && match[2] && isBrowserSafeTranscriptHref(match[2])) {
+      html += `<a class="code-file-link" href="${escapeAttribute(match[2])}" target="_blank" rel="noreferrer">${escapeHtml(match[1])}</a>`;
+    } else if (match[3]) {
+      const rawUrl = match[3];
+      const url = rawUrl.replace(/[.,;:!?]+$/g, '');
+      const suffix = rawUrl.slice(url.length);
+      html += isBrowserSafeTranscriptHref(url)
+        ? `<a class="code-file-link" href="${escapeAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>${escapeHtml(suffix)}`
+        : escapeHtml(rawUrl);
+    } else {
+      html += escapeHtml(match[0]);
+    }
+    lastIndex = start + match[0].length;
   }
   html += escapeHtml(source.slice(lastIndex));
   return html;
